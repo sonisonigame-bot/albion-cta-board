@@ -9,6 +9,9 @@ st.title("⚔️ Albion Online 40人構成＆出席ボード")
 MEMBER_PASSWORD = "sonikuma"
 ADMIN_PASSWORD = "sonikuma12341234"
 
+# ★あなたのスプレッドシートのURLを直接指定
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1IeuBcjxlscI5EXmYQyed_ITzBPk2r45nnN9Im8GwmdY/edit"
+
 # --- 2. ログイン機能（サイドバー） ---
 with st.sidebar:
     st.header("🔑 ログイン")
@@ -26,22 +29,22 @@ with st.sidebar:
             st.error("パスワードが違います")
         st.warning("パスワードを入力すると参加表が表示されます。")
 
-# パスワードが合っていない場合は、ここで画面の描画をストップする
 if not (is_admin or is_member):
     st.stop()
 
-# --- 3. スプレッドシート読み込み ---
+# --- 3. スプレッドシート読み込み（URLを直接指定） ---
 conn = st.connection("gsheets", type=GSheetsConnection)
-df = conn.read(ttl="2m")
+# ★ここでスプレッドシートを強制的に読み込ませます
+df = conn.read(spreadsheet=SHEET_URL, ttl="2m")
 
-# 初期データの作成（データが空、または「コメント」列がない場合）
+# 初期データの作成
 if df.empty or "コメント" not in df.columns:
     df = pd.DataFrame({
         "パーティ": [f"Party {(i//5)+1}" for i in range(40)],
         "ロール": ["タンク", "ヒーラー", "DPS(Melee)", "DPS(Ranged)", "サポート"] * 8,
         "枠(詳細)": [f"Slot {i+1}" for i in range(40)],
         "プレイヤー名": ["" for _ in range(40)],
-        "コメント": ["" for _ in range(40)], # ★新規追加
+        "コメント": ["" for _ in range(40)],
         "武器": ["(未定)"] * 40,
         "オフハンド": ["-"] * 40,
         "頭": ["(未定)"] * 40,
@@ -51,7 +54,6 @@ if df.empty or "コメント" not in df.columns:
         "食べ物": ["(未定)"] * 40,
     })
 
-# データ内の「NaN（欠損値）」を空文字に変換（エラー防止）
 df = df.fillna("")
 
 # --- 4. ダッシュボード（集計） ---
@@ -77,19 +79,16 @@ with col3:
 
 st.divider()
 
-# --- 5. 編集ロック設定（権限コントロール） ---
-# 装備・構成に関する列のリスト（メンバーには触らせない）
+# --- 5. 編集ロック設定 ---
 EQUIPMENT_COLUMNS = ["パーティ", "ロール", "枠(詳細)", "武器", "オフハンド", "頭", "胴", "足", "マント", "食べ物"]
 
 if is_admin:
-    # 管理者はすべて編集可能（ロックなし）
     disabled_cols = []
     config = {
         "ロール": st.column_config.SelectboxColumn("ロール", options=["タンク", "ヒーラー", "DPS(Melee)", "DPS(Ranged)", "サポート", "コーラー"])
     }
     st.write("🔧 **【管理者画面】** 表のセルをクリックして構成を編集してください。（Enterキーを押すと自動保存されます）")
 else:
-    # メンバーは「プレイヤー名」「コメント」以外をロック
     disabled_cols = EQUIPMENT_COLUMNS
     config = {}
     st.write("✋ **【出席登録】** 自分の乗る枠の「プレイヤー名」と「コメント」を入力してください。（Enterキーを押すと自動保存されます）")
@@ -104,10 +103,9 @@ edited_df = st.data_editor(
     height=800 
 )
 
-# --- 7. 🔥 完全自動保存システム 🔥 ---
-# 読み込んだ時のデータ(df)と、画面上で編集されたデータ(edited_df)に違いがあるかチェック
+# --- 7. 🔥 自動保存システム（URLを直接指定） ---
 if not df.equals(edited_df):
-    # 違いがあれば、自動的にスプレッドシートを更新！
-    conn.update(data=edited_df)
+    # ★ここでもスプレッドシートを強制指定して上書き保存させます
+    conn.update(spreadsheet=SHEET_URL, data=edited_df)
     st.success("🔄 変更を自動保存しました！")
-    st.rerun() # 画面をリロードして最新状態をキープ
+    st.rerun()
