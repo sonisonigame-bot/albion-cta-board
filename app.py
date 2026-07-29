@@ -7,8 +7,9 @@ st.set_page_config(page_title="🐻KUMA Albion Dashboard", layout="wide")
 st.title("🐻 KUMA ギルドダッシュボード (Asiaサーバー)")
 st.write("Albion Onlineの公式データから自動取得しています。")
 
-# --- 1. Albion Asia(East)サーバーのAPI設定 ---
+# --- 1. API設定 ---
 BASE_URL = "https://gameinfo-sgp.albiononline.com/api/gameinfo"
+RENDER_URL = "https://render.albiononline.com/v1/item" # 画像生成用API
 GUILD_NAME = "KUMA"
 
 # --- 2. データを取得する関数 ---
@@ -50,17 +51,14 @@ def get_guild_events(guild_id):
 
 @st.cache_data(ttl=300)
 def search_player(player_name):
-    """プレイヤー名から詳細なステータスを取得する"""
     search_url = f"{BASE_URL}/search?q={player_name}"
     try:
         response = requests.get(search_url, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            # 検索結果から名前が完全一致するプレイヤーを探す
             for p in data.get("players", []):
                 if p["Name"].upper() == player_name.upper():
                     player_id = p["Id"]
-                    # プレイヤーIDを使って詳細情報を取得
                     detail_url = f"{BASE_URL}/players/{player_id}"
                     detail_res = requests.get(detail_url, timeout=10)
                     if detail_res.status_code == 200:
@@ -76,7 +74,7 @@ with st.spinner("Albion公式サーバーからデータを取得中..."):
 if guild_info:
     guild_id = guild_info["Id"]
     
-    # --- 4. 画面表示（3つのタブで分割） ---
+    # --- 4. 画面表示 ---
     tab1, tab2, tab3 = st.tabs(["📊 ギルド情報＆メンバー", "⚔️ 最近のキルボード", "🔍 メンバー検索"])
 
     # 【タブ1】ギルド情報とメンバーランキング
@@ -106,7 +104,7 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキル＆デス履歴 ＋ ドロップ（相手の装備）
+    # 【タブ2】最新のキル＆デス履歴 ＋ ドロップ画像のUI
     with tab2:
         st.subheader("⚔️ 直近の戦闘ログ (最新20件)")
         events_data = get_guild_events(guild_id)
@@ -124,25 +122,32 @@ if guild_info:
                 v_guild = victim.get("GuildName", "")
                 v_ip = int(victim.get("AverageItemPower", 0))
                 
-                # ★ 倒された相手の装備（ドロップ候補）をリスト化
+                # ★ 倒された相手の装備をアイコン画像（HTML）に変換
                 victim_equipment = victim.get("Equipment", {})
-                equip_list = []
+                html_images = ""
                 for slot, item in victim_equipment.items():
-                    if item:  # 空の装備スロットを除外
-                        equip_list.append(f"`{item.get('Type')}`")
+                    if item:
+                        item_name = item.get('Type')
+                        # 画像URLの生成（品質も反映できますが、今回は基本アイコンのみ）
+                        img_url = f"{RENDER_URL}/{item_name}.png?size=60"
+                        # 画像を横に並べるためのHTMLタグ
+                        html_images += f'<img src="{img_url}" width="50" title="{item_name}" style="background-color: #2c2c2c; border-radius: 8px; margin-right: 5px; border: 1px solid #555;">'
                 
-                loot_text = " / ".join(equip_list) if equip_list else "装備なし"
-                
+                # KUMAのメンバーがキルしたか、デスしたかで表示を変える
                 if k_guild.upper() == GUILD_NAME.upper():
-                    st.info(f"🔥 **キル** : **{k_name}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_name}** [{v_guild}] (IP: {v_ip})")
-                    st.caption(f"🎁 **相手の装備（戦利品候補）:** {loot_text}")
+                    st.success(f"🔥 **キル** : **{k_name}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_name}** [{v_guild}] (IP: {v_ip})")
+                    if html_images:
+                        st.markdown(f"**🎁 相手の装備（ドロップ候補）:**<br>{html_images}", unsafe_allow_html=True)
                 else:
                     st.error(f"💀 **デス** : **{v_name}** (IP: {v_ip}) ⚔️ 倒された相手 ➡ **{k_name}** [{k_guild}] (IP: {k_ip})")
-                    st.caption(f"💥 **ロストした装備:** {loot_text}")
+                    if html_images:
+                        st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
+                
+                st.write("---") # ログとログの間に区切り線を入れる
         else:
             st.write("最近の戦闘データが見つかりませんでした。")
 
-    # 【タブ3】新規追加：個人メンバー検索
+    # 【タブ3】個人メンバー検索
     with tab3:
         st.subheader("🔍 プレイヤー詳細検索")
         st.write("気になるプレイヤーの名前を入力して、現在のステータスを確認できます。")
@@ -165,7 +170,6 @@ if guild_info:
                         
                         st.write(f"🛡️ **所属ギルド:** {player_data.get('GuildName', '無所属')}")
                         
-                        # PvEなどの生涯ステータス
                         stats = player_data.get('LifetimeStatistics', {})
                         pve_fame = int(stats.get('PvE', {}).get('Total', 0))
                         crafting_fame = int(stats.get('Crafting', {}).get('Total', 0))
