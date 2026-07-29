@@ -41,7 +41,6 @@ def render_equipment_html(equipment_dict):
     return html_images
 
 def categorize_weapon(w_type):
-    """武器の内部名からロールを判定する"""
     w = str(w_type).upper()
     if any(x in w for x in ['_MACE', '_HAMMER', '_SHIELD']): return "🛡️ タンク"
     if any(x in w for x in ['_HOLYSTAFF', '_NATURESTAFF']): return "💚 ヒーラー"
@@ -57,7 +56,6 @@ def get_guild_info(guild_name):
         if res.status_code == 200:
             for guild in res.json().get("guilds", []):
                 if guild["Name"].upper() == guild_name.upper():
-                    # ★修正：完全なギルドデータを取得してフェイムの0エラーを解決
                     detail_res = requests.get(f"{BASE_URL}/guilds/{guild['Id']}", timeout=10)
                     if detail_res.status_code == 200:
                         return detail_res.json()
@@ -101,7 +99,6 @@ def get_battle_details(battle_id):
 
 @st.cache_data(ttl=300)
 def get_group_battles(guild_id, guild_name, min_players=3):
-    # ★修正：50件まで取得範囲を広げて、今日のバトルを拾いやすくする
     url = f"{BASE_URL}/battles?limit=50&offset=0&guildId={guild_id}"
     valid_battles = []
     try:
@@ -118,6 +115,29 @@ def get_group_battles(guild_id, guild_name, min_players=3):
     except: pass
     return valid_battles
 
+@st.cache_data(ttl=300)
+def search_player(player_name):
+    search_url = f"{BASE_URL}/search?q={player_name}"
+    try:
+        res = requests.get(search_url, timeout=10)
+        if res.status_code == 200:
+            for p in res.json().get("players", []):
+                if p["Name"].upper() == player_name.upper():
+                    detail_res = requests.get(f"{BASE_URL}/players/{p['Id']}", timeout=10)
+                    if detail_res.status_code == 200:
+                        return {"info": detail_res.json(), "id": p['Id']}
+    except: pass
+    return None
+
+@st.cache_data(ttl=300)
+def get_player_recent_history(player_id, event_type="kills", limit=3):
+    url = f"{BASE_URL}/players/{player_id}/{event_type}?limit={limit}"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200: return res.json()[:limit]
+    except: pass
+    return []
+
 # --- 3. データの取得 ---
 with st.spinner("Albion公式サーバーからデータを取得中..."):
     guild_info = get_guild_info(GUILD_NAME)
@@ -126,13 +146,15 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    tab1, tab2, tab3 = st.tabs([
-        "📊 総合ステータス＆メタ分析", 
-        "⚔️ 最近のキルボード", 
+    # ★ タブを4つに戻し、「個人検索」を復帰
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 総合ステータス＆分析", 
+        "⚔️ 最近のキルボード",
+        "🔍 プレイヤー詳細分析",
         "🛡️ 集団戦 バトルレポート"
     ])
 
-    # 【タブ1】総合ステータス ＆ メタ分析
+    # 【タブ1】総合ステータス ＆ 分析
     with tab1:
         st.subheader("📊 ギルド総合ステータス")
         members_data = get_guild_members(guild_id)
@@ -150,12 +172,26 @@ if guild_info:
 
         st.divider()
             
-        st.subheader("📈 ギルド内 ロール別・武器メタ分析")
-        st.write("直近150件の戦闘ログから、キルに関与した武器をロール別にTop5まで表示します。")
-        with st.spinner("メタデータを集計中..."):
+        st.subheader("📈 ギルド行動 ＆ メタ分析")
+        with st.spinner("行動データを集計中..."):
             analysis_events = get_analysis_events(guild_id)
         
         if analysis_events:
+            # ★ 活動時間帯グラフを復活
+            st.markdown("##### 🕒 最も活発な時間帯 (JST)")
+            hours = {f"{h}時": 0 for h in range(24)}
+            for ev in analysis_events:
+                _, jst_time = convert_time(ev.get("TimeStamp", ""))
+                if jst_time != "Unknown":
+                    hour_str = jst_time.split(" ")[1].split(":")[0]
+                    hours[f"{int(hour_str)}時"] += 1
+            st.bar_chart(pd.DataFrame({"キル/デス発生数": list(hours.values())}, index=list(hours.keys())))
+            
+            st.divider()
+
+            # ★ ロール別メタ分析
+            st.markdown("##### ⚔️ ギルド内 ロール別・武器メタTop5")
+            st.write("直近150件の戦闘ログから、キルに関与した武器をロール別に集計しています。")
             role_weapons = {"🛡️ タンク": {}, "⚔️ 火力(近接)": {}, "🏹 火力(遠距離)": {}, "💚 ヒーラー": {}, "🌀 サポート/デバフ": {}}
             
             for ev in analysis_events:
@@ -168,7 +204,6 @@ if guild_info:
                         if role in role_weapons:
                             role_weapons[role][w_type] = role_weapons[role].get(w_type, 0) + 1
             
-            # ロールごとにカラムを分けて表示
             cols = st.columns(5)
             for idx, (role, weapons) in enumerate(role_weapons.items()):
                 with cols[idx]:
@@ -217,15 +252,62 @@ if guild_info:
                     if html_images: st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
                 st.write("---")
 
-    # 【タブ3】🛡️ 集団戦 バトルレポート (★参加者詳細追加版★)
+    # 【タブ3】プレイヤー詳細分析 (★復活★)
     with tab3:
+        st.subheader("🔍 プレイヤー詳細分析")
+        search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
+        if st.button("検索する", type="primary"):
+            if search_name:
+                with st.spinner("解析中..."):
+                    player_result = search_player(search_name)
+                    if player_result:
+                        p_data, p_id = player_result["info"], player_result["id"]
+                        st.success(f"✅ {p_data['Name']} (所属: {p_data.get('GuildName', '無所属')})")
+                        
+                        k_fame = int(p_data.get('KillFame') or p_data.get('killFame') or 0)
+                        d_fame = int(p_data.get('DeathFame') or p_data.get('deathFame') or 0)
+                        
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("🔥 キルフェイム", f"{k_fame:,}")
+                        c2.metric("💀 デスフェイム", f"{d_fame:,}")
+                        c3.metric("⚖️ K/D 比", f"{k_fame / d_fame if d_fame > 0 else 0:.2f}")
+                        
+                        st.divider()
+                        
+                        st.subheader("🔥 直近のキル (最新3件)")
+                        for kill in get_player_recent_history(p_id, "kills", 3):
+                            k_eq = render_equipment_html(kill.get("Killer", {}).get("Equipment", {}))
+                            v_eq = render_equipment_html(kill.get("Victim", {}).get("Equipment", {}))
+                            _, jst_time = convert_time(kill.get("TimeStamp", ""))
+                            st.info(f"⚔️ 倒した相手: **{kill.get('Victim', {}).get('Name', 'Unknown')}** ｜ 🕒 **{jst_time}**")
+                            st.markdown(f"**自分の装備:**<br>{k_eq}", unsafe_allow_html=True)
+                            st.markdown(f"**相手の装備 (名声: {kill.get('TotalVictimKillFame', 0):,}):**<br>{v_eq}", unsafe_allow_html=True)
+                            st.write("")
+                            
+                        st.subheader("💀 直近のデス (最新3件)")
+                        for death in get_player_recent_history(p_id, "deaths", 3):
+                            k_eq = render_equipment_html(death.get("Killer", {}).get("Equipment", {}))
+                            v_eq = render_equipment_html(death.get("Victim", {}).get("Equipment", {}))
+                            _, jst_time = convert_time(death.get("TimeStamp", ""))
+                            st.error(f"⚔️ 倒された相手: **{death.get('Killer', {}).get('Name', 'Unknown')}** ｜ 🕒 **{jst_time}**")
+                            st.markdown(f"**相手の装備:**<br>{k_eq}", unsafe_allow_html=True)
+                            st.markdown(f"**ロストした装備 (相手の名声: {death.get('TotalVictimKillFame', 0):,}):**<br>{v_eq}", unsafe_allow_html=True)
+                            st.write("")
+                    else:
+                        st.error("プレイヤーが見つかりませんでした。")
+
+    # 【タブ4】🛡️ 集団戦 バトルレポート
+    with tab4:
         st.subheader("🛡️ 集団戦 バトルレポート")
-        st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。(APIの仕様上、平均IPが0になるバグや反映遅延があります)")
+        st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。(平均IPの項目はバグ対策のため削除しました)")
         
         with st.spinner("直近のバトルを探索中... (最大50件のバトルを分析します)"):
             group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=3)
             
         if group_battles:
+            # ★ 最新順（時間が新しい順）に並び替える処理
+            group_battles = sorted(group_battles, key=lambda x: x["summary"].get("startTime", ""), reverse=True)
+            
             battle_options = {}
             for zb in group_battles:
                 b = zb["summary"]
@@ -234,7 +316,7 @@ if guild_info:
                 label = f"🕒 {jst_time} ｜ KUMA参加: {zb['kuma_count']}名 ｜ 総キル: {b.get('totalKills', 0)} (ID: {b_id})"
                 battle_options[label] = zb
             
-            selected_label = st.selectbox("詳細を見たいバトルを選択してください", list(battle_options.keys()))
+            selected_label = st.selectbox("詳細を見たいバトルを選択してください (最新順)", list(battle_options.keys()))
             b_detail = battle_options[selected_label]["detail"]
             
             if b_detail:
@@ -257,21 +339,21 @@ if guild_info:
                     if not g_name: g_name = "無所属"
                     
                     if g_name not in guild_stats:
-                        guild_stats[g_name] = {"count": 0, "kills": 0, "deaths": 0, "fame": 0, "ip": 0}
+                        guild_stats[g_name] = {"count": 0, "kills": 0, "deaths": 0, "fame": 0}
                     
                     gs = guild_stats[g_name]
                     gs["count"] += 1
                     gs["kills"] += p.get("kills", 0)
                     gs["deaths"] += p.get("deaths", 0)
                     gs["fame"] += p.get("killFame", 0)
-                    gs["ip"] += p.get("averageItemPower", 0)
 
                 g_rows = []
                 for g, gs in guild_stats.items():
                     g_rows.append({
                         "ギルド": g, "人数": gs['count'], "キル": gs['kills'], "デス": gs['deaths'], 
                         "K/D": f"{(gs['kills'] / gs['deaths']):.2f}" if gs['deaths'] > 0 else f"{gs['kills']}.00",
-                        "名声": gs['fame'], "平均IP": int(gs['ip'] / gs['count']) if gs['count'] > 0 else 0
+                        "名声": gs['fame']
+                        # ★ 平均IPは削除しました
                     })
                 
                 df_guilds = pd.DataFrame(g_rows).sort_values(by="人数", ascending=False)
@@ -282,7 +364,7 @@ if guild_info:
                 
                 st.dataframe(df_guilds.style.apply(highlight_kuma, axis=1), use_container_width=True)
                 
-                # --- ★追加：参加プレイヤーの超詳細データテーブル ---
+                # --- KUMA参加プレイヤー詳細データテーブル ---
                 st.markdown("#### 👥 参加プレイヤー詳細 (KUMAメンバー)")
                 kuma_players = []
                 for p in players:
@@ -293,7 +375,7 @@ if guild_info:
                         kuma_players.append({
                             "プレイヤー名": p.get("name"),
                             "ロール推定": role,
-                            "平均IP": int(p.get("averageItemPower", 0)),
+                            # ★ 平均IPは削除しました
                             "キル": p.get("kills", 0),
                             "デス": p.get("deaths", 0),
                             "与ダメ (DMG)": int(p.get("damageDone", 0)),
