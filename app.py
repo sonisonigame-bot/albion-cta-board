@@ -17,13 +17,22 @@ GUILD_NAME = "KUMA"
 def convert_time(time_str):
     """AlbionのUTC時間を日本時間(JST)とUTCに変換する"""
     try:
-        # "2023-10-26T12:34:56.789Z" のような文字列の先頭19文字分を取得して変換
         dt_utc = datetime.strptime(time_str[:19], "%Y-%m-%dT%H:%M:%S")
         dt_utc = dt_utc.replace(tzinfo=timezone.utc)
         dt_jst = dt_utc.astimezone(timezone(timedelta(hours=9)))
         return dt_utc.strftime("%m/%d %H:%M"), dt_jst.strftime("%m/%d %H:%M")
     except Exception:
         return "Unknown", "Unknown"
+
+def render_equipment_html(equipment_dict):
+    """装備データをHTMLの画像タグリストに変換する"""
+    html_images = ""
+    for slot, item in equipment_dict.items():
+        if item:
+            item_name = item.get('Type')
+            img_url = f"{RENDER_URL}/{item_name}.png?size=60"
+            html_images += f'<img src="{img_url}" width="50" title="{item_name}" style="background-color: #2c2c2c; border-radius: 8px; margin-right: 5px; border: 1px solid #555;">'
+    return html_images
 
 @st.cache_data(ttl=300)
 def get_guild_info(guild_name):
@@ -50,7 +59,6 @@ def get_guild_members(guild_id):
         pass
     return []
 
-# ★ offsetを追加してページ切り替えに対応
 @st.cache_data(ttl=60)
 def get_guild_events(guild_id, offset=0):
     events_url = f"{BASE_URL}/events?limit=20&offset={offset}&guildId={guild_id}"
@@ -80,18 +88,17 @@ def search_player(player_name):
         pass
     return None
 
+# ★ 新規追加：個人のキル・デス履歴を5件取得
 @st.cache_data(ttl=300)
-def get_player_recent_kill(player_id):
-    kills_url = f"{BASE_URL}/players/{player_id}/kills?limit=1"
+def get_player_recent_history(player_id, event_type="kills", limit=5):
+    url = f"{BASE_URL}/players/{player_id}/{event_type}?limit={limit}"
     try:
-        response = requests.get(kills_url, timeout=10)
+        response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            kills = response.json()
-            if kills:
-                return kills[0]
+            return response.json()
     except Exception:
         pass
-    return None
+    return []
 
 # --- 3. データの取得 ---
 with st.spinner("Albion公式サーバーからデータを取得中..."):
@@ -101,7 +108,7 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    tab1, tab2, tab3 = st.tabs(["📊 ギルド情報＆メンバー", "⚔️ 最近のキルボード (最大100件)", "🔍 メンバー検索"])
+    tab1, tab2, tab3 = st.tabs(["📊 ギルド情報＆メンバー", "⚔️ 最近のキルボード (最大100件)", "🔍 プレイヤー詳細分析"])
 
     # 【タブ1】ギルド情報とメンバーランキング
     with tab1:
@@ -129,23 +136,16 @@ if guild_info:
     # 【タブ2】最新のキル＆デス履歴 (ページネーション対応)
     with tab2:
         st.subheader("⚔️ 直近の戦闘ログ")
-        
-        # ★ ページ切り替え用UI（1〜5ページで最大100件）
         selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
         current_offset = (selected_page - 1) * 20
-        
         events_data = get_guild_events(guild_id, offset=current_offset)
         
         if events_data:
             for ev in events_data:
                 killer = ev.get("Killer", {})
                 victim = ev.get("Victim", {})
-                
-                # ★ 時間の取得と変換
                 time_str = ev.get("TimeStamp", "")
                 utc_time, jst_time = convert_time(time_str)
-                
-                # ★ 装備の推定価値（獲得フェイム基準）
                 victim_fame = ev.get("TotalVictimKillFame", 0)
                 
                 k_name = killer.get("Name", "Unknown")
@@ -156,39 +156,33 @@ if guild_info:
                 v_guild = victim.get("GuildName", "")
                 v_ip = int(victim.get("AverageItemPower", 0))
                 
-                victim_equipment = victim.get("Equipment", {})
-                html_images = ""
-                for slot, item in victim_equipment.items():
-                    if item:
-                        item_name = item.get('Type')
-                        img_url = f"{RENDER_URL}/{item_name}.png?size=60"
-                        html_images += f'<img src="{img_url}" width="50" title="{item_name}" style="background-color: #2c2c2c; border-radius: 8px; margin-right: 5px; border: 1px solid #555;">'
+                html_images = render_equipment_html(victim.get("Equipment", {}))
                 
-                # 表示の組み立て
                 if k_guild.upper() == GUILD_NAME.upper():
                     st.success(f"🔥 **キル** : **{k_name}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_name}** [{v_guild}] (IP: {v_ip})")
-                    st.caption(f"🕒 **日本時間:** {jst_time} (UTC: {utc_time}) ｜ 💰 **装備推定価値(Fame):** {victim_fame:,}")
+                    # ★ 取得名声に変更
+                    st.caption(f"🕒 **日本時間:** {jst_time} (UTC: {utc_time}) ｜ 🌟 **取得名声(Fame):** {victim_fame:,}")
                     if html_images:
                         st.markdown(f"**🎁 相手の装備（ドロップ候補）:**<br>{html_images}", unsafe_allow_html=True)
                 else:
                     st.error(f"💀 **デス** : **{v_name}** (IP: {v_ip}) ⚔️ 倒された相手 ➡ **{k_name}** [{k_guild}] (IP: {k_ip})")
-                    st.caption(f"🕒 **日本時間:** {jst_time} (UTC: {utc_time}) ｜ 💰 **ロスト推定価値(Fame):** {victim_fame:,}")
+                    # ★ 取得名声(ロスト分)に変更
+                    st.caption(f"🕒 **日本時間:** {jst_time} (UTC: {utc_time}) ｜ 🌟 **相手の取得名声:** {victim_fame:,}")
                     if html_images:
                         st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
-                
                 st.write("---")
         else:
             st.info("このページの戦闘データは見つかりませんでした。")
 
-    # 【タブ3】個人メンバー検索
+    # 【タブ3】個人メンバー詳細分析
     with tab3:
-        st.subheader("🔍 プレイヤー詳細検索")
-        st.write("気になるプレイヤーの名前を入力して、現在のステータスと直近の戦闘装備を確認できます。")
+        st.subheader("🔍 プレイヤー詳細分析")
+        st.write("プレイヤー名を入力して、詳細な戦績と直近の戦闘履歴（5件）を確認します。")
         
         search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
         if st.button("検索する", type="primary"):
             if search_name:
-                with st.spinner(f"「{search_name}」のデータを検索中..."):
+                with st.spinner(f"「{search_name}」のデータを解析中..."):
                     player_result = search_player(search_name)
                     
                     if player_result:
@@ -196,36 +190,19 @@ if guild_info:
                         player_id = player_result["id"]
                         
                         st.success(f"✅ {player_data['Name']} のデータが見つかりました！")
+                        st.write(f"🛡️ **現在の所属ギルド:** {player_data.get('GuildName', '無所属')}")
                         
-                        p_col1, p_col2 = st.columns(2)
+                        # ★ K/D比の追加
+                        p_col1, p_col2, p_col3 = st.columns(3)
                         p_k_fame = int(player_data.get('KillFame') or player_data.get('killFame') or 0)
                         p_d_fame = int(player_data.get('DeathFame') or player_data.get('deathFame') or 0)
+                        p_kd_ratio = p_k_fame / p_d_fame if p_d_fame > 0 else 0
                         
                         p_col1.metric("🔥 キルフェイム", f"{p_k_fame:,}")
                         p_col2.metric("💀 デスフェイム", f"{p_d_fame:,}")
+                        p_col3.metric("⚖️ K/D 比", f"{p_kd_ratio:.2f}")
                         
-                        st.write(f"🛡️ **所属ギルド:** {player_data.get('GuildName', '無所属')}")
-                        
-                        recent_kill = get_player_recent_kill(player_id)
-                        if recent_kill:
-                            killer_equip = recent_kill.get("Killer", {}).get("Equipment", {})
-                            equip_html = ""
-                            for slot, item in killer_equip.items():
-                                if item:
-                                    item_name = item.get('Type')
-                                    img_url = f"{RENDER_URL}/{item_name}.png?size=80"
-                                    equip_html += f'<img src="{img_url}" width="60" title="{item_name}" style="background-color: #2c2c2c; border-radius: 8px; margin-right: 5px; border: 1px solid #777;">'
-                            
-                            st.markdown(f"**⚔️ 直近の戦闘装備 (Latest Combat Loadout):**<br>{equip_html}", unsafe_allow_html=True)
-                            
-                            time_str = recent_kill.get("TimeStamp", "")
-                            utc_time, jst_time = convert_time(time_str)
-                            st.caption(f"※🕒 {jst_time} に {recent_kill.get('Victim', {}).get('Name', 'Unknown')} をキルした際の装備です。")
-                        else:
-                            st.info("直近の戦闘データ（装備情報）が見つかりませんでした。")
-                        
-                        st.divider()
-                        
+                        # 生涯ステータス
                         stats = player_data.get('LifetimeStatistics', {})
                         pve_fame = int(stats.get('PvE', {}).get('Total', 0))
                         crafting_fame = int(stats.get('Crafting', {}).get('Total', 0))
@@ -233,12 +210,53 @@ if guild_info:
                         
                         st.markdown(f"""
                         **[ 📊 生涯フェイム ]**
-                        * ⚔️ PvE (Mob討伐): **{pve_fame:,}**
-                        * 🔨 製作 (Crafting): **{crafting_fame:,}**
-                        * 🪓 採集 (Gathering): **{gathering_fame:,}**
+                        * ⚔️ PvE (Mob討伐): **{pve_fame:,}** ｜ 🔨 製作: **{crafting_fame:,}** ｜ 🪓 採集: **{gathering_fame:,}**
                         """)
+                        
+                        st.divider()
+                        
+                        # ★ 直近のキル履歴 (5件)
+                        st.subheader("🔥 直近のキル (最新5件)")
+                        recent_kills = get_player_recent_history(player_id, event_type="kills", limit=5)
+                        if recent_kills:
+                            for kill in recent_kills:
+                                k_equip_html = render_equipment_html(kill.get("Killer", {}).get("Equipment", {}))
+                                v_equip_html = render_equipment_html(kill.get("Victim", {}).get("Equipment", {}))
+                                utc_time, jst_time = convert_time(kill.get("TimeStamp", ""))
+                                v_name = kill.get("Victim", {}).get("Name", "Unknown")
+                                v_guild = kill.get("Victim", {}).get("GuildName", "無所属")
+                                v_fame = kill.get("TotalVictimKillFame", 0)
+                                
+                                st.info(f"⚔️ 倒した相手: **{v_name}** [{v_guild}] ｜ 🕒 **{jst_time}** (UTC: {utc_time})")
+                                st.markdown(f"**自分の装備:**<br>{k_equip_html}", unsafe_allow_html=True)
+                                st.markdown(f"**相手の装備 (取得名声: {v_fame:,}):**<br>{v_equip_html}", unsafe_allow_html=True)
+                                st.write("")
+                        else:
+                            st.write("キル履歴がありません。")
+
+                        st.divider()
+
+                        # ★ 直近のデス履歴 (5件)
+                        st.subheader("💀 直近のデス (最新5件)")
+                        recent_deaths = get_player_recent_history(player_id, event_type="deaths", limit=5)
+                        if recent_deaths:
+                            for death in recent_deaths:
+                                k_equip_html = render_equipment_html(death.get("Killer", {}).get("Equipment", {}))
+                                v_equip_html = render_equipment_html(death.get("Victim", {}).get("Equipment", {}))
+                                utc_time, jst_time = convert_time(death.get("TimeStamp", ""))
+                                k_name = death.get("Killer", {}).get("Name", "Unknown")
+                                k_guild = death.get("Killer", {}).get("GuildName", "無所属")
+                                v_fame = death.get("TotalVictimKillFame", 0)
+                                
+                                st.error(f"⚔️ 倒された相手: **{k_name}** [{k_guild}] ｜ 🕒 **{jst_time}** (UTC: {utc_time})")
+                                st.markdown(f"**相手の装備:**<br>{k_equip_html}", unsafe_allow_html=True)
+                                st.markdown(f"**自分がロストした装備 (相手の取得名声: {v_fame:,}):**<br>{v_equip_html}", unsafe_allow_html=True)
+                                st.write("")
+                        else:
+                            st.write("デス履歴がありません。")
+                            
                     else:
-                        st.error("プレイヤーが見つかりませんでした。名前が間違っているか、APIサーバーが混雑しています。")
+                        st.error("プレイヤーが見つかりませんでした。名前が間違っているか、APIが混雑しています。")
 
 else:
     st.error(f"ギルド『{GUILD_NAME}』のデータが見つかりませんでした。公式APIが混雑している可能性があります。")
