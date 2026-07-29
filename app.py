@@ -178,7 +178,9 @@ if guild_info:
         
         if analysis_events:
             st.markdown("##### 🕒 最も活発な時間帯 (JST)")
-            hour_labels = [f"{h}時" for h in range(1, 24)] + ["24時"]
+            
+            # 「01時」〜「24時」のように0埋めして文字コード順のバグを防ぐ
+            hour_labels = [f"{h:02d}時" for h in range(1, 25)]
             hours = {label: 0 for label in hour_labels}
             
             for ev in analysis_events:
@@ -186,10 +188,24 @@ if guild_info:
                 if jst_time != "Unknown":
                     hour_str = jst_time.split(" ")[1].split(":")[0]
                     h_int = int(hour_str)
-                    label = "24時" if h_int == 0 else f"{h_int}時"
+                    
+                    # 0時は24時に変換
+                    h_int = 24 if h_int == 0 else h_int
+                    
+                    label = f"{h_int:02d}時"
                     hours[label] += 1
             
-            st.bar_chart(pd.DataFrame({"キル/デス発生数": list(hours.values())}, index=list(hours.keys())))
+            # x軸とy軸を明示してグラフ化
+            df_hours = pd.DataFrame({
+                "時間": list(hours.keys()),
+                "キル/デス発生数": list(hours.values())
+            })
+            st.bar_chart(df_hours, x="時間", y="キル/デス発生数")
+           
+            
+            st.divider()
+
+            st.markdown("##### ⚔️ ギルド内 ロール別・武器メタTop5")
             
             st.divider()
 
