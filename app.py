@@ -15,7 +15,6 @@ GUILD_NAME = "KUMA"
 
 # --- 2. ユーティリティ・データ取得関数 ---
 def convert_time(time_str):
-    """AlbionのUTC時間を日本時間(JST)とUTCに変換する"""
     try:
         dt_utc = datetime.strptime(time_str[:19], "%Y-%m-%dT%H:%M:%S")
         dt_utc = dt_utc.replace(tzinfo=timezone.utc)
@@ -25,7 +24,6 @@ def convert_time(time_str):
         return "Unknown", "Unknown"
 
 def render_equipment_html(equipment_dict):
-    """装備データをHTMLの画像タグリストに変換する"""
     html_images = ""
     for slot, item in equipment_dict.items():
         if item:
@@ -94,7 +92,6 @@ def get_player_recent_history(player_id, event_type="kills", limit=3):
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            # ★ 修正ポイント: APIがlimitを無視して10件送ってくることがあるため、Python側で確実にカットする
             return response.json()[:limit]
     except Exception:
         pass
@@ -108,30 +105,83 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    tab1, tab2, tab3 = st.tabs(["📊 ギルド情報＆メンバー", "⚔️ 最近のキルボード (最大100件)", "🔍 プレイヤー詳細分析"])
+    tab1, tab2, tab3 = st.tabs(["📊 ギルド総合ステータス", "⚔️ 最近のキルボード (最大100件)", "🔍 プレイヤー詳細分析"])
 
-    # 【タブ1】ギルド情報とメンバーランキング
+    # 【タブ1】ギルド情報とメンバーランキング (🔥 超強化版)
     with tab1:
         st.subheader("📊 ギルド総合ステータス")
-        col1, col2, col3 = st.columns(3)
+        
+        # メンバーデータを取得して人数をカウント
+        members_data = get_guild_members(guild_id)
+        total_members = len(members_data) if members_data else 0
+        
+        col1, col2, col3, col4 = st.columns(4)
         kill_fame = int(guild_info.get('killFame') or guild_info.get('KillFame') or 0)
         death_fame = int(guild_info.get('deathFame') or guild_info.get('DeathFame') or 0)
-        col1.metric("🔥 総キルフェイム", f"{kill_fame:,}")
-        col2.metric("💀 総デスフェイム", f"{death_fame:,}")
         kd_ratio = kill_fame / death_fame if death_fame > 0 else 0
-        col3.metric("⚖️ K/D 比", f"{kd_ratio:.2f}")
+        
+        col1.metric("👥 現在のメンバー数", f"{total_members} 名")
+        col2.metric("🔥 総キルフェイム", f"{kill_fame:,}")
+        col3.metric("💀 総デスフェイム", f"{death_fame:,}")
+        col4.metric("⚖️ ギルド総合 K/D", f"{kd_ratio:.2f}")
 
         st.divider()
 
-        st.subheader("👥 メンバー別 戦績ボード")
-        members_data = get_guild_members(guild_id)
         if members_data:
             df = pd.DataFrame(members_data)
             df = df[['Name', 'KillFame', 'DeathFame', 'FameRatio']]
             df.columns = ['プレイヤー名', 'キルフェイム', 'デスフェイム', 'K/D比']
-            df = df.sort_values(by='キルフェイム', ascending=False)
-            df.index = range(1, len(df) + 1)
-            st.dataframe(df, use_container_width=True, height=600)
+            
+            # --- 🏆 ギルド内MVP (Top 3) ---
+            st.subheader("🏆 ギルド内MVP (現在のトップランカー)")
+            mvp_col1, mvp_col2, mvp_col3 = st.columns(3)
+            
+            # 1. 最多キルフェイム
+            top_killers = df.sort_values(by='キルフェイム', ascending=False).head(3)
+            with mvp_col1:
+                st.markdown("##### ⚔️ 最多キルフェイム")
+                for i, row in top_killers.iterrows():
+                    st.info(f"**{row['プレイヤー名']}**\n\n{int(row['キルフェイム']):,} Fame")
+            
+            # 2. ベストK/D比 (100万Fame以上)
+            valid_kd = df[df['キルフェイム'] >= 1000000].sort_values(by='K/D比', ascending=False).head(3)
+            with mvp_col2:
+                st.markdown("##### 👑 ベスト K/D 比 (1M Fame以上)")
+                if not valid_kd.empty:
+                    for i, row in valid_kd.iterrows():
+                        st.success(f"**{row['プレイヤー名']}**\n\nK/D: {row['K/D比']:.2f}")
+                else:
+                    st.write("該当者なし")
+            
+            # 3. 最多デス (タンクや前線で体を張った人)
+            top_deaths = df.sort_values(by='デスフェイム', ascending=False).head(3)
+            with mvp_col3:
+                st.markdown("##### 🛡️ 最多デス (前線MVP・犠牲者)")
+                for i, row in top_deaths.iterrows():
+                    st.error(f"**{row['プレイヤー名']}**\n\n{int(row['デスフェイム']):,} Fame")
+            
+            st.divider()
+            
+            # --- 📈 メンバー層の分析グラフ ---
+            st.subheader("📈 ギルド戦闘力分布（メンバーのキルフェイム層）")
+            st.write("ギルド内にどのレベル帯のプレイヤーが何人いるかをグラフ化しています。")
+            
+            # グラフ用のデータ作成
+            bins = [0, 1000000, 5000000, 10000000, 50000000, float('inf')]
+            labels = ['100万未満 (初心者)', '100万〜500万', '500万〜1000万', '1000万〜5000万', '5000万以上 (ベテラン)']
+            df['フェイム層'] = pd.cut(df['キルフェイム'], bins=bins, labels=labels, right=False)
+            dist = df['フェイム層'].value_counts().reindex(labels)
+            
+            dist_df = pd.DataFrame({"人数": dist})
+            st.bar_chart(dist_df)
+            
+            st.divider()
+
+            # --- 👥 メンバー別戦績ボード ---
+            st.subheader("👥 メンバー別 戦績ボード")
+            df_display = df[['プレイヤー名', 'キルフェイム', 'デスフェイム', 'K/D比']].sort_values(by='キルフェイム', ascending=False)
+            df_display.index = range(1, len(df_display) + 1)
+            st.dataframe(df_display, use_container_width=True, height=600)
 
     # 【タブ2】最新のキル＆デス履歴 (ページネーション対応)
     with tab2:
@@ -211,7 +261,6 @@ if guild_info:
                         
                         st.divider()
                         
-                        # ★ 直近のキル履歴 (強制的に3件)
                         st.subheader("🔥 直近のキル (最新3件)")
                         recent_kills = get_player_recent_history(player_id, event_type="kills", limit=3)
                         if recent_kills:
@@ -232,7 +281,6 @@ if guild_info:
 
                         st.divider()
 
-                        # ★ 直近のデス履歴 (強制的に3件)
                         st.subheader("💀 直近のデス (最新3件)")
                         recent_deaths = get_player_recent_history(player_id, event_type="deaths", limit=3)
                         if recent_deaths:
