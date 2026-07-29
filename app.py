@@ -88,9 +88,8 @@ def search_player(player_name):
         pass
     return None
 
-# ★ 新規追加：個人のキル・デス履歴を5件取得
 @st.cache_data(ttl=300)
-def get_player_recent_history(player_id, event_type="kills", limit=5):
+def get_player_recent_history(player_id, event_type="kills", limit=3):
     url = f"{BASE_URL}/players/{player_id}/{event_type}?limit={limit}"
     try:
         response = requests.get(url, timeout=10)
@@ -160,13 +159,11 @@ if guild_info:
                 
                 if k_guild.upper() == GUILD_NAME.upper():
                     st.success(f"🔥 **キル** : **{k_name}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_name}** [{v_guild}] (IP: {v_ip})")
-                    # ★ 取得名声に変更
                     st.caption(f"🕒 **日本時間:** {jst_time} (UTC: {utc_time}) ｜ 🌟 **取得名声(Fame):** {victim_fame:,}")
                     if html_images:
                         st.markdown(f"**🎁 相手の装備（ドロップ候補）:**<br>{html_images}", unsafe_allow_html=True)
                 else:
                     st.error(f"💀 **デス** : **{v_name}** (IP: {v_ip}) ⚔️ 倒された相手 ➡ **{k_name}** [{k_guild}] (IP: {k_ip})")
-                    # ★ 取得名声(ロスト分)に変更
                     st.caption(f"🕒 **日本時間:** {jst_time} (UTC: {utc_time}) ｜ 🌟 **相手の取得名声:** {victim_fame:,}")
                     if html_images:
                         st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
@@ -177,7 +174,7 @@ if guild_info:
     # 【タブ3】個人メンバー詳細分析
     with tab3:
         st.subheader("🔍 プレイヤー詳細分析")
-        st.write("プレイヤー名を入力して、詳細な戦績と直近の戦闘履歴（5件）を確認します。")
+        st.write("プレイヤー名を入力して、詳細な戦績と直近の戦闘履歴を確認します。")
         
         search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
         if st.button("検索する", type="primary"):
@@ -192,7 +189,6 @@ if guild_info:
                         st.success(f"✅ {player_data['Name']} のデータが見つかりました！")
                         st.write(f"🛡️ **現在の所属ギルド:** {player_data.get('GuildName', '無所属')}")
                         
-                        # ★ K/D比の追加
                         p_col1, p_col2, p_col3 = st.columns(3)
                         p_k_fame = int(player_data.get('KillFame') or player_data.get('killFame') or 0)
                         p_d_fame = int(player_data.get('DeathFame') or player_data.get('deathFame') or 0)
@@ -202,7 +198,6 @@ if guild_info:
                         p_col2.metric("💀 デスフェイム", f"{p_d_fame:,}")
                         p_col3.metric("⚖️ K/D 比", f"{p_kd_ratio:.2f}")
                         
-                        # 生涯ステータス
                         stats = player_data.get('LifetimeStatistics', {})
                         pve_fame = int(stats.get('PvE', {}).get('Total', 0))
                         crafting_fame = int(stats.get('Crafting', {}).get('Total', 0))
@@ -215,9 +210,9 @@ if guild_info:
                         
                         st.divider()
                         
-                        # ★ 直近のキル履歴 (5件)
-                        st.subheader("🔥 直近のキル (最新5件)")
-                        recent_kills = get_player_recent_history(player_id, event_type="kills", limit=5)
+                        # ★ 直近のキル履歴 (3件に短縮)
+                        st.subheader("🔥 直近のキル (最新3件)")
+                        recent_kills = get_player_recent_history(player_id, event_type="kills", limit=3)
                         if recent_kills:
                             for kill in recent_kills:
                                 k_equip_html = render_equipment_html(kill.get("Killer", {}).get("Equipment", {}))
@@ -236,9 +231,9 @@ if guild_info:
 
                         st.divider()
 
-                        # ★ 直近のデス履歴 (5件)
-                        st.subheader("💀 直近のデス (最新5件)")
-                        recent_deaths = get_player_recent_history(player_id, event_type="deaths", limit=5)
+                        # ★ 直近のデス履歴 (3件に短縮)
+                        st.subheader("💀 直近のデス (最新3件)")
+                        recent_deaths = get_player_recent_history(player_id, event_type="deaths", limit=3)
                         if recent_deaths:
                             for death in recent_deaths:
                                 k_equip_html = render_equipment_html(death.get("Killer", {}).get("Equipment", {}))
