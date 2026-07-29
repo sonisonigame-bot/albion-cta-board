@@ -194,7 +194,6 @@ if guild_info:
             st.divider()
 
             st.markdown("##### ⚔️ ギルド内 ロール別・武器メタTop5")
-            st.write("直近150件の戦闘ログから、キルに関与した武器をロール別に集計しています。")
             role_weapons = {"🛡️ タンク": {}, "⚔️ 火力(近接)": {}, "🏹 火力(遠距離)": {}, "💚 ヒーラー": {}, "🌀 サポート/デバフ": {}}
             
             for ev in analysis_events:
@@ -229,14 +228,29 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード
+    # 【タブ2】最新のキルボード (★絞り込み機能追加★)
     with tab2:
         st.subheader("⚔️ 直近の戦闘ログ")
-        selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
-        events_data = get_guild_events(guild_id, offset=(selected_page - 1) * 20)
         
-        if events_data:
-            for ev in events_data:
+        search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
+        
+        display_events = []
+        if search_filter:
+            st.caption("※直近150件のログから抽出しています。")
+            with st.spinner("検索中..."):
+                all_events = get_analysis_events(guild_id)
+                for ev in all_events:
+                    k_name = ev.get("Killer", {}).get("Name", "")
+                    v_name = ev.get("Victim", {}).get("Name", "")
+                    if search_filter.upper() in k_name.upper() or search_filter.upper() in v_name.upper():
+                        display_events.append(ev)
+                display_events = display_events[:50] # 最大50件表示
+        else:
+            selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
+            display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 20)
+        
+        if display_events:
+            for ev in display_events:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 v_fame = ev.get("TotalVictimKillFame", 0)
@@ -254,6 +268,11 @@ if guild_info:
                     st.caption(f"🕒 {jst_time} ｜ 🌟 相手の取得名声: {v_fame:,}")
                     if html_images: st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
                 st.write("---")
+        else:
+            if search_filter:
+                st.info("条件に一致するログは見つかりませんでした。")
+            else:
+                st.info("データが見つかりませんでした。")
 
     # 【タブ3】プレイヤー詳細分析
     with tab3:
@@ -299,7 +318,7 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】🛡️ 集団戦 バトルレポート
+    # 【タブ4】🛡️ 集団戦 バトルレポート (★名声カンマ対応★)
     with tab4:
         st.subheader("🛡️ 集団戦 バトルレポート")
         st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。")
@@ -354,7 +373,8 @@ if guild_info:
                     g_rows.append({
                         "ギルド": g, "人数": gs['count'], "キル": gs['kills'], "デス": gs['deaths'], 
                         "K/D": f"{(gs['kills'] / gs['deaths']):.2f}" if gs['deaths'] > 0 else f"{gs['kills']}.00",
-                        "名声": gs['fame']
+                        # ★ 名声をカンマ区切りにフォーマット
+                        "名声": f"{gs['fame']:,}"
                     })
                 
                 df_guilds = pd.DataFrame(g_rows).sort_values(by="人数", ascending=False)
@@ -367,7 +387,6 @@ if guild_info:
                 
                 st.divider()
                 
-                # --- ★修正：取得できない装備とロールの情報を削除した、シンプルなギルド別メンバー表 ---
                 st.markdown("#### 👥 ギルド別 参加メンバー詳細")
                 
                 guild_list = list(guild_stats.keys())
@@ -390,7 +409,8 @@ if guild_info:
                             "プレイヤー名": p.get("name"),
                             "キル": p.get("kills", 0),
                             "デス": p.get("deaths", 0),
-                            "キル名声": p.get("killFame", 0)
+                            # ★ 個人のキル名声もカンマ区切りにフォーマット
+                            "キル名声": f"{p.get('killFame', 0):,}"
                         })
                 
                 if target_players:
