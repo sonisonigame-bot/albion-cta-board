@@ -97,7 +97,6 @@ def get_player_recent_history(player_id, event_type="kills", limit=3):
         pass
     return []
 
-# ★ 新規追加：分析用の大量データ一括取得（100件）
 @st.cache_data(ttl=300)
 def get_analysis_events(guild_id):
     events = []
@@ -111,10 +110,9 @@ def get_analysis_events(guild_id):
             pass
     return events
 
-# ★ 新規追加：集団戦(ZvZ)バトルデータの取得
 @st.cache_data(ttl=300)
 def get_guild_battles(guild_id):
-    url = f"{BASE_URL}/battles?limit=5&offset=0&guildId={guild_id}"
+    url = f"{BASE_URL}/battles?limit=10&offset=0&guildId={guild_id}"
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
@@ -123,6 +121,18 @@ def get_guild_battles(guild_id):
         pass
     return []
 
+# ★ 新規追加：特定のバトルIDの詳細情報を取得する関数
+@st.cache_data(ttl=300)
+def get_battle_details(battle_id):
+    url = f"{BASE_URL}/battles/{battle_id}"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return None
+
 # --- 3. データの取得 ---
 with st.spinner("Albion公式サーバーからデータを取得中..."):
     guild_info = get_guild_info(GUILD_NAME)
@@ -130,16 +140,15 @@ with st.spinner("Albion公式サーバーからデータを取得中..."):
 if guild_info:
     guild_id = guild_info["Id"]
     
-    # --- 4. 画面表示 ---
-    # ★ タブを4つに拡張しました！
+    # --- 4. 画面表示 (タブを4つに整理) ---
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 ギルド総合ステータス", 
+        "📊 総合ステータス＆分析", 
         "⚔️ 最近のキルボード", 
         "🔍 プレイヤー詳細分析", 
-        "📈 分析＆バトルレポート"
+        "🛡️ ZvZ バトルレポート"
     ])
 
-    # 【タブ1】ギルド情報とメンバーランキング
+    # 【タブ1】総合ステータス ＋ メンバーランキング ＋ ヒートマップ ＆ メタ分析
     with tab1:
         st.subheader("📊 ギルド総合ステータス")
         members_data = get_guild_members(guild_id)
@@ -162,6 +171,7 @@ if guild_info:
             df = df[['Name', 'KillFame', 'DeathFame', 'FameRatio']]
             df.columns = ['プレイヤー名', 'キルフェイム', 'デスフェイム', 'K/D比']
             
+            # --- 🏆 MVPボード ---
             st.subheader("🏆 ギルド内MVP (現在のトップランカー)")
             mvp_col1, mvp_col2, mvp_col3 = st.columns(3)
             
@@ -188,14 +198,45 @@ if guild_info:
             
             st.divider()
             
-            st.subheader("📈 ギルド戦闘力分布（メンバーのキルフェイム層）")
-            bins = [0, 1000000, 5000000, 10000000, 50000000, float('inf')]
-            labels = ['100万未満 (初心者)', '100万〜500万', '500万〜1000万', '1000万〜5000万', '5000万以上 (ベテラン)']
-            df['フェイム層'] = pd.cut(df['キルフェイム'], bins=bins, labels=labels, right=False)
-            dist = df['フェイム層'].value_counts().reindex(labels)
-            dist_df = pd.DataFrame({"人数": dist})
-            st.bar_chart(dist_df)
+            # --- 📈 ギルド行動分析 ＆ 武器メタ分析 (ご要望によりタブ1に統合) ---
+            st.subheader("📈 ギルド行動分析 ＆ メタ分析")
             
+            with st.spinner("行動データを集計中..."):
+                analysis_events = get_analysis_events(guild_id)
+            
+            if analysis_events:
+                ana_col1, ana_col2 = st.columns(2)
+                
+                with ana_col1:
+                    st.markdown("##### 🕒 最も活発な時間帯 (JST)")
+                    hours = {f"{h}時": 0 for h in range(24)}
+                    for ev in analysis_events:
+                        _, jst_time = convert_time(ev.get("TimeStamp", ""))
+                        if jst_time != "Unknown":
+                            hour_str = jst_time.split(" ")[1].split(":")[0]
+                            hours[f"{int(hour_str)}時"] += 1
+                    df_hours = pd.DataFrame({"イベント数": list(hours.values())}, index=list(hours.keys()))
+                    st.bar_chart(df_hours)
+                
+                with ana_col2:
+                    st.markdown("##### ⚔️ ギルド内 武器メタ (Top 5)")
+                    weapon_counts = {}
+                    for ev in analysis_events:
+                        killer = ev.get("Killer", {})
+                        if killer.get("GuildName", "").upper() == GUILD_NAME.upper():
+                            main_hand = killer.get("Equipment", {}).get("MainHand")
+                            if main_hand:
+                                w_type = main_hand.get("Type")
+                                weapon_counts[w_type] = weapon_counts.get(w_type, 0) + 1
+                    
+                    if weapon_counts:
+                        sorted_weapons = sorted(weapon_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+                        for w_type, count in sorted_weapons:
+                            img_url = f"{RENDER_URL}/{w_type}.png?size=50"
+                            st.markdown(f'<img src="{img_url}" width="40" style="background-color: #2c2c2c; border-radius: 8px; vertical-align: middle; margin-right: 10px;"> **{w_type}** : {count} キル', unsafe_allow_html=True)
+                    else:
+                        st.write("データなし")
+
             st.divider()
 
             st.subheader("👥 メンバー別 戦績ボード")
@@ -314,87 +355,60 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】📈 ギルド分析 ＆ バトルレポート (★超絶アップデート★)
+    # 【タブ4】🛡️ ZvZ バトルレポート (★詳細クリック表示対応★)
     with tab4:
-        st.subheader("📈 ギルド行動分析 ＆ バトルレポート")
-        st.write("直近100件の戦闘データを元に、ギルドの戦術傾向を分析します。")
-        
-        with st.spinner("データを集計中... (これには数秒かかります)"):
-            analysis_events = get_analysis_events(guild_id)
-        
-        if analysis_events:
-            # --- 1. 活動時間帯ヒートマップ ---
-            st.markdown("### 🕒 最も活発な時間帯 (JST)")
-            st.write("ギルド内で直近キル・デスが発生している時間帯のピークです。")
-            
-            hours = {f"{h}時": 0 for h in range(24)}
-            for ev in analysis_events:
-                _, jst_time = convert_time(ev.get("TimeStamp", ""))
-                if jst_time != "Unknown":
-                    # "10/27 21:30" -> "21"
-                    hour_str = jst_time.split(" ")[1].split(":")[0]
-                    hour_key = f"{int(hour_str)}時"
-                    hours[hour_key] += 1
-                    
-            df_hours = pd.DataFrame({"イベント発生数": list(hours.values())}, index=list(hours.keys()))
-            st.bar_chart(df_hours)
-            
-            st.divider()
-
-            # --- 2. 武器メタ分析 ---
-            st.markdown("### ⚔️ ギルド内 武器メタ分析 (Top 5)")
-            st.write("直近の戦闘において、ギルドメンバーがキルを獲得した際に使用していた武器のランキングです。")
-            
-            weapon_counts = {}
-            for ev in analysis_events:
-                killer = ev.get("Killer", {})
-                # KUMAメンバーのキルの場合のみ集計
-                if killer.get("GuildName", "").upper() == GUILD_NAME.upper():
-                    main_hand = killer.get("Equipment", {}).get("MainHand")
-                    if main_hand:
-                        w_type = main_hand.get("Type")
-                        weapon_counts[w_type] = weapon_counts.get(w_type, 0) + 1
-            
-            if weapon_counts:
-                # 使用回数順に並び替え
-                sorted_weapons = sorted(weapon_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-                
-                cols = st.columns(len(sorted_weapons))
-                for i, (w_type, count) in enumerate(sorted_weapons):
-                    with cols[i]:
-                        img_url = f"{RENDER_URL}/{w_type}.png?size=100"
-                        st.markdown(f'<img src="{img_url}" style="background-color: #2c2c2c; border-radius: 12px; border: 2px solid #aaa;">', unsafe_allow_html=True)
-                        st.metric(label=f"Rank {i+1}", value=f"{count} キル")
-                        st.caption(f"`{w_type}`")
-            else:
-                st.write("分析に十分なキルデータがありません。")
-
-        st.divider()
-
-        # --- 3. 集団戦(ZvZ) バトルレポート ---
-        st.markdown("### 🛡️ 集団戦(ZvZ) バトルレポート (直近5件)")
-        st.write("システムが検知したギルドが関与した大規模戦闘（バトルボード）の結果です。")
+        st.subheader("🛡️ 集団戦(ZvZ) バトルレポート")
+        st.write("ギルドが関与した大規模戦闘のリストです。気になるバトルの詳細を確認できます。")
         
         with st.spinner("バトルデータを取得中..."):
             battles = get_guild_battles(guild_id)
             
         if battles:
+            # バトルを選択するためのセレクトボックスを作成
+            battle_options = {}
             for b in battles:
                 b_id = b.get("id")
-                total_kills = b.get("totalKills", 0)
-                total_fame = b.get("totalFame", 0)
                 _, jst_time = convert_time(b.get("startTime", ""))
+                total_kills = b.get("totalKills", 0)
+                label = f"ID: {b_id} ｜ 🕒 {jst_time} ｜ 総キル数: {total_kills}"
+                battle_options[label] = b_id
+            
+            selected_label = st.selectbox("詳細を見たいバトルを選択してください", list(battle_options.keys()))
+            selected_battle_id = battle_options[selected_label]
+            
+            if selected_battle_id:
+                with st.spinner("バトル詳細データを取得中..."):
+                    b_detail = get_battle_details(selected_battle_id)
                 
-                # 参加ギルドの抽出
-                guilds_dict = b.get("guilds", {})
-                guild_names = [g.get("name") for g in guilds_dict.values() if g.get("name")]
-                g_str = " / ".join(guild_names[:6]) + ("..." if len(guild_names) > 6 else "")
-                
-                st.info(f"⚔️ **バトルID:** `{b_id}` ｜ 🕒 発生時間: **{jst_time}** ｜ 💀 **総キル数:** {total_kills} ｜ 🌟 **総フェイム:** {total_fame:,}")
-                st.write(f"🚩 **激突したギルド:** {g_str}")
-                st.write("") # スペース
+                if b_detail:
+                    st.divider()
+                    st.markdown(f"### 📋 バトル詳細レポート (ID: `{selected_battle_id}`)")
+                    
+                    _, jst_time = convert_time(b_detail.get("startTime", ""))
+                    st.write(f"🕒 **開始時間 (JST):** {jst_time}")
+                    st.write(f"💀 **総キル数:** {b_detail.get('totalKills', 0):,} ｜ 🌟 **総獲得名声:** {b_detail.get('totalFame', 0):,}")
+                    
+                    st.markdown("#### 🚩 参加ギルド一覧 ＆ 戦績")
+                    guilds_res = b_detail.get("guilds", {})
+                    
+                    guild_summary = []
+                    for g_id, g_info in guilds_res.items():
+                        guild_summary.append({
+                            "ギルド名": g_info.get("name", "Unknown"),
+                            "キル数": g_info.get("kills", 0),
+                            "デス数": g_info.get("deaths", 0),
+                            "取得名声": g_info.get("killFame", 0)
+                        })
+                    
+                    if guild_summary:
+                        df_guilds = pd.DataFrame(guild_summary)
+                        df_guilds = df_guilds.sort_values(by="キル数", ascending=False)
+                        df_guilds.index = range(1, len(df_guilds) + 1)
+                        st.dataframe(df_guilds, use_container_width=True)
+                else:
+                    st.error("バトル詳細の取得に失敗しました。")
         else:
-            st.info("直近の集団戦データがありません。（小規模な戦いはZvZバトルとして記録されません）")
+            st.info("直近の集団戦データがありません。")
 
 else:
     st.error(f"ギルド『{GUILD_NAME}』のデータが見つかりませんでした。公式APIが混雑している可能性があります。")
