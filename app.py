@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
+import os
 
 st.set_page_config(page_title="Albion CTA Board", layout="wide")
 st.title("⚔️ Albion Online 40人構成＆出席ボード")
@@ -9,10 +9,7 @@ st.title("⚔️ Albion Online 40人構成＆出席ボード")
 MEMBER_PASSWORD = "sonikuma"
 ADMIN_PASSWORD = "sonikuma12341234"
 
-# ★あなたのスプレッドシートのURLを直接指定
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1IeuBcjxlscI5EXmYQyed_ITzBPk2r45nnN9Im8GwmdY/edit"
-
-# --- 2. ログイン機能（サイドバー） ---
+# --- 2. ログイン機能 ---
 with st.sidebar:
     st.header("🔑 ログイン")
     entered_password = st.text_input("パスワードを入力してください", type="password")
@@ -32,32 +29,37 @@ with st.sidebar:
 if not (is_admin or is_member):
     st.stop()
 
-# --- 3. スプレッドシート読み込み（URLを直接指定） ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-# ★ここでスプレッドシートを強制的に読み込ませます
-df = conn.read(spreadsheet=SHEET_URL, ttl="2m")
+# --- 3. 内部ファイル（CSV）からデータ読み込み ---
+DATA_FILE = "cta_data.csv"
 
-# 初期データの作成
-if df.empty or "コメント" not in df.columns:
-    df = pd.DataFrame({
-        "パーティ": [f"Party {(i//5)+1}" for i in range(40)],
-        "ロール": ["タンク", "ヒーラー", "DPS(Melee)", "DPS(Ranged)", "サポート"] * 8,
-        "枠(詳細)": [f"Slot {i+1}" for i in range(40)],
-        "プレイヤー名": ["" for _ in range(40)],
-        "コメント": ["" for _ in range(40)],
-        "武器": ["(未定)"] * 40,
-        "オフハンド": ["-"] * 40,
-        "頭": ["(未定)"] * 40,
-        "胴": ["(未定)"] * 40,
-        "足": ["(未定)"] * 40,
-        "マント": ["(未定)"] * 40,
-        "食べ物": ["(未定)"] * 40,
-    })
+def load_data():
+    # もし保存されたファイルがあれば読み込む
+    if os.path.exists(DATA_FILE):
+        return pd.read_csv(DATA_FILE)
+    else:
+        # 初回起動時（ファイルがない時）は新しい表を作る
+        new_df = pd.DataFrame({
+            "パーティ": [f"Party {(i//5)+1}" for i in range(40)],
+            "ロール": ["タンク", "ヒーラー", "DPS(Melee)", "DPS(Ranged)", "サポート"] * 8,
+            "枠(詳細)": [f"Slot {i+1}" for i in range(40)],
+            "プレイヤー名": ["" for _ in range(40)],
+            "コメント": ["" for _ in range(40)],
+            "武器": ["(未定)"] * 40,
+            "オフハンド": ["-"] * 40,
+            "頭": ["(未定)"] * 40,
+            "胴": ["(未定)"] * 40,
+            "足": ["(未定)"] * 40,
+            "マント": ["(未定)"] * 40,
+            "食べ物": ["(未定)"] * 40,
+        })
+        return new_df
 
-df = df.fillna("")
+df = load_data()
+# 空欄（NaN）を文字の空白に変換してエラーを防ぐ
+df = df.fillna("") 
 
 # --- 4. ダッシュボード（集計） ---
-attendees = df[df["プレイヤー名"].str.strip() != ""]
+attendees = df[df["プレイヤー名"].astype(str).str.strip() != ""]
 filled_count = len(attendees)
 
 st.subheader("📊 現在の編成ステータス")
@@ -87,11 +89,11 @@ if is_admin:
     config = {
         "ロール": st.column_config.SelectboxColumn("ロール", options=["タンク", "ヒーラー", "DPS(Melee)", "DPS(Ranged)", "サポート", "コーラー"])
     }
-    st.write("🔧 **【管理者画面】** 表のセルをクリックして構成を編集してください。（Enterキーを押すと自動保存されます）")
+    st.write("🔧 **【管理者画面】** 表のセルをクリックして構成を編集してください。（Enterキーで自動保存）")
 else:
     disabled_cols = EQUIPMENT_COLUMNS
     config = {}
-    st.write("✋ **【出席登録】** 自分の乗る枠の「プレイヤー名」と「コメント」を入力してください。（Enterキーを押すと自動保存されます）")
+    st.write("✋ **【出席登録】** 自分の乗る枠の「プレイヤー名」と「コメント」を入力してください。（Enterキーで自動保存）")
 
 # --- 6. 表の表示 ---
 edited_df = st.data_editor(
@@ -103,9 +105,9 @@ edited_df = st.data_editor(
     height=800 
 )
 
-# --- 7. 🔥 自動保存システム（URLを直接指定） ---
+# --- 7. 🔥 内部ファイルへの自動保存システム ---
 if not df.equals(edited_df):
-    # ★ここでもスプレッドシートを強制指定して上書き保存させます
-    conn.update(spreadsheet=SHEET_URL, data=edited_df)
+    # 変更があれば、内部のCSVファイルに上書き保存する
+    edited_df.to_csv(DATA_FILE, index=False)
     st.success("🔄 変更を自動保存しました！")
     st.rerun()
