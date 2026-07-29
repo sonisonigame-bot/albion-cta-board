@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -6,14 +7,63 @@ from datetime import datetime, timezone, timedelta
 # 画面設定
 st.set_page_config(page_title="🐻KUMA Albion Dashboard", layout="wide")
 
-# --- 🔒 パスワード認証システム ---
-st.title("🐻 KUMA ギルドダッシュボード (Asiaサーバー)")
+# --- 🔒 パスワード認証システム ＆ サイドバー ---
+st.sidebar.title("🐻 KUMA ダッシュボード")
 password = st.sidebar.text_input("🔑 パスワード", type="password")
 
 if password != "sonikuma":
     st.warning("👈 このダッシュボードを閲覧するには、左側のサイドバーからパスワードを入力してロックを解除してください。")
     st.stop()
 
+# --- ⏱️ Albion ライブ時計ウィジェット (HTML/JS) ---
+# パスワード解除後にサイドバーに表示します
+components.html("""
+<div style="font-family: sans-serif; padding: 15px; background: #262730; color: white; border-radius: 10px; text-align: center; border: 1px solid #444;">
+    <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 8px;">⏱️ Albion サーバー時間</div>
+    <div style="font-size: 1.6em; color: #ffbd45; font-weight: bold; letter-spacing: 2px;" id="utc-time">--:--:--</div>
+    <div style="font-size: 0.9em; color: #ccc; margin-top: 5px;" id="jst-time">日本時間: --:--:--</div>
+    <div style="margin-top: 12px; font-size: 0.85em; color: #00d2ff; background: rgba(0,210,255,0.1); padding: 5px; border-radius: 5px;" id="maint-timer">
+        メンテまで計算中...
+    </div>
+</div>
+<script>
+    function updateTime() {
+        const now = new Date();
+        
+        // UTC時間の計算
+        const utc = now.toISOString().substring(11, 19);
+        document.getElementById("utc-time").innerText = "UTC " + utc;
+
+        // 日本時間(JST)の計算
+        const jstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+        const jst = jstTime.toISOString().substring(11, 19);
+        document.getElementById("jst-time").innerText = "JST (日本) " + jst;
+
+        // メンテナンス(UTC 10:00)までのカウントダウン計算
+        let maint = new Date(now);
+        maint.setUTCHours(10, 0, 0, 0);
+        if(now > maint) {
+            maint.setUTCDate(maint.getUTCDate() + 1); // 10時を過ぎていたら翌日の10時
+        }
+        const diff = maint - now;
+        const h = Math.floor(diff / (1000 * 60 * 60));
+        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const s = Math.floor((diff % (1000 * 60)) / 1000);
+        
+        // 0埋め処理
+        const hh = String(h).padStart(2, '0');
+        const mm = String(m).padStart(2, '0');
+        const ss = String(s).padStart(2, '0');
+        
+        document.getElementById("maint-timer").innerText = "⏰ メンテまで " + hh + "時間" + mm + "分" + ss + "秒";
+    }
+    setInterval(updateTime, 1000);
+    updateTime();
+</script>
+""", height=180)
+
+# メイン画面ヘッダー
+st.title("🐻 KUMA ギルドダッシュボード (Asiaサーバー)")
 st.write("Albion Onlineの公式データから自動取得しています。")
 
 # --- 1. API設定 ---
@@ -178,8 +228,6 @@ if guild_info:
         
         if analysis_events:
             st.markdown("##### 🕒 最も活発な時間帯 (JST)")
-            
-            # 「01時」〜「24時」のように0埋めして文字コード順のバグを防ぐ
             hour_labels = [f"{h:02d}時" for h in range(1, 25)]
             hours = {label: 0 for label in hour_labels}
             
@@ -188,24 +236,15 @@ if guild_info:
                 if jst_time != "Unknown":
                     hour_str = jst_time.split(" ")[1].split(":")[0]
                     h_int = int(hour_str)
-                    
-                    # 0時は24時に変換
                     h_int = 24 if h_int == 0 else h_int
-                    
                     label = f"{h_int:02d}時"
                     hours[label] += 1
             
-            # x軸とy軸を明示してグラフ化
             df_hours = pd.DataFrame({
                 "時間": list(hours.keys()),
                 "キル/デス発生数": list(hours.values())
             })
             st.bar_chart(df_hours, x="時間", y="キル/デス発生数")
-           
-            
-            st.divider()
-
-            st.markdown("##### ⚔️ ギルド内 ロール別・武器メタTop5")
             
             st.divider()
 
@@ -244,7 +283,7 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード (★絞り込み機能追加★)
+    # 【タブ2】最新のキルボード
     with tab2:
         st.subheader("⚔️ 直近の戦闘ログ")
         
@@ -260,7 +299,7 @@ if guild_info:
                     v_name = ev.get("Victim", {}).get("Name", "")
                     if search_filter.upper() in k_name.upper() or search_filter.upper() in v_name.upper():
                         display_events.append(ev)
-                display_events = display_events[:50] # 最大50件表示
+                display_events = display_events[:50]
         else:
             selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
             display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 20)
@@ -334,7 +373,7 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】🛡️ 集団戦 バトルレポート (★名声カンマ対応★)
+    # 【タブ4】🛡️ 集団戦 バトルレポート
     with tab4:
         st.subheader("🛡️ 集団戦 バトルレポート")
         st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。")
@@ -389,7 +428,6 @@ if guild_info:
                     g_rows.append({
                         "ギルド": g, "人数": gs['count'], "キル": gs['kills'], "デス": gs['deaths'], 
                         "K/D": f"{(gs['kills'] / gs['deaths']):.2f}" if gs['deaths'] > 0 else f"{gs['kills']}.00",
-                        # ★ 名声をカンマ区切りにフォーマット
                         "名声": f"{gs['fame']:,}"
                     })
                 
@@ -402,7 +440,6 @@ if guild_info:
                 st.dataframe(df_guilds.style.apply(highlight_kuma, axis=1), use_container_width=True)
                 
                 st.divider()
-                
                 st.markdown("#### 👥 ギルド別 参加メンバー詳細")
                 
                 guild_list = list(guild_stats.keys())
@@ -425,7 +462,6 @@ if guild_info:
                             "プレイヤー名": p.get("name"),
                             "キル": p.get("kills", 0),
                             "デス": p.get("deaths", 0),
-                            # ★ 個人のキル名声もカンマ区切りにフォーマット
                             "キル名声": f"{p.get('killFame', 0):,}"
                         })
                 
