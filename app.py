@@ -5,7 +5,15 @@ from datetime import datetime, timezone, timedelta
 
 # 画面設定
 st.set_page_config(page_title="🐻KUMA Albion Dashboard", layout="wide")
+
+# --- 🔒 パスワード認証システム ---
 st.title("🐻 KUMA ギルドダッシュボード (Asiaサーバー)")
+password = st.sidebar.text_input("🔑 パスワード", type="password")
+
+if password != "sonikuma":
+    st.warning("👈 このダッシュボードを閲覧するには、左側のサイドバーからパスワードを入力してロックを解除してください。")
+    st.stop() # パスワードが一致するまでここで処理を停止します
+
 st.write("Albion Onlineの公式データから自動取得しています。")
 
 # --- 1. API設定 ---
@@ -103,9 +111,9 @@ def get_battle_details(battle_id):
     except: pass
     return None
 
-# ★ 新規追加：KUMAが5人以上いるZvZバトルだけを抽出して詳細を取得する関数
+# ★ 修正ポイント：KUMAが「3人以上」いる集団戦バトルを抽出するように変更
 @st.cache_data(ttl=300)
-def get_zvz_battles(guild_id, guild_name, min_players=5):
+def get_group_battles(guild_id, guild_name, min_players=3):
     url = f"{BASE_URL}/battles?limit=20&offset=0&guildId={guild_id}"
     valid_battles = []
     try:
@@ -135,7 +143,7 @@ if guild_info:
         "📊 総合ステータス＆分析", 
         "⚔️ 最近のキルボード", 
         "🔍 プレイヤー詳細分析", 
-        "🛡️ ZvZ バトルレポート (★最強版★)"
+        "🛡️ 集団戦 バトルレポート"
     ])
 
     # 【タブ1】総合ステータス
@@ -272,7 +280,6 @@ if guild_info:
                         
                         st.divider()
                         
-                        # キル履歴
                         st.subheader("🔥 直近のキル (最新3件)")
                         for kill in get_player_recent_history(p_id, "kills", 3):
                             k_eq = render_equipment_html(kill.get("Killer", {}).get("Equipment", {}))
@@ -283,7 +290,6 @@ if guild_info:
                             st.markdown(f"**相手の装備 (名声: {kill.get('TotalVictimKillFame', 0):,}):**<br>{v_eq}", unsafe_allow_html=True)
                             st.write("")
                             
-                        # デス履歴
                         st.subheader("💀 直近のデス (最新3件)")
                         for death in get_player_recent_history(p_id, "deaths", 3):
                             k_eq = render_equipment_html(death.get("Killer", {}).get("Equipment", {}))
@@ -296,18 +302,18 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】🛡️ ZvZ バトルレポート (★最強詳細版★)
+    # 【タブ4】🛡️ 集団戦 バトルレポート
     with tab4:
-        st.subheader("🛡️ 最強 ZvZ バトルレポート")
-        st.write("※ KUMAのメンバーが **5名以上** 参加した大規模戦闘（ZvZ）のみを自動抽出し、完全解析します。")
+        st.subheader("🛡️ 最強 集団戦 バトルレポート")
+        st.write("※ KUMAのメンバーが **3名以上** 参加した集団戦のみを自動抽出し、完全解析します。")
         
         with st.spinner("直近のバトルを探索・集計中... (最大20件のバトルを分析するため、数秒かかります)"):
-            zvz_battles = get_zvz_battles(guild_id, GUILD_NAME, min_players=5)
+            # ★ 参加条件を 3人 に変更
+            group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=3)
             
-        if zvz_battles:
-            # ドロップダウンリストの作成
+        if group_battles:
             battle_options = {}
-            for zb in zvz_battles:
+            for zb in group_battles:
                 b = zb["summary"]
                 k_count = zb["kuma_count"]
                 b_id = b.get("id")
@@ -316,7 +322,7 @@ if guild_info:
                 label = f"🕒 {jst_time} ｜ KUMA参加: {k_count}名 ｜ 総キル: {total_kills} (ID: {b_id})"
                 battle_options[label] = zb
             
-            selected_label = st.selectbox("詳細を見たいZvZバトルを選択してください", list(battle_options.keys()))
+            selected_label = st.selectbox("詳細を見たい集団戦バトルを選択してください", list(battle_options.keys()))
             b_detail = battle_options[selected_label]["detail"]
             
             if b_detail:
@@ -324,14 +330,12 @@ if guild_info:
                 _, jst_time = convert_time(b_detail.get("startTime", ""))
                 players = list(b_detail.get("players", {}).values())
                 
-                # --- 1. バトルサマリー ---
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("🕒 発生時間", jst_time)
                 col2.metric("👥 総参加人数", f"{len(players)} 名")
                 col3.metric("💀 総キル数", f"{b_detail.get('totalKills', 0):,}")
                 col4.metric("🌟 総獲得名声", f"{b_detail.get('totalFame', 0):,}")
                 
-                # --- 2. 👑 バトルMVP (全体トップ) ---
                 st.markdown("#### 👑 バトルMVP (彼我全体トップ)")
                 if players:
                     top_killer = max(players, key=lambda x: x.get('kills', 0))
@@ -349,7 +353,6 @@ if guild_info:
                         
                 st.divider()
 
-                # --- 3. ギルド別 戦果比較テーブル ---
                 st.markdown("#### 🚩 ギルド別 戦果比較レポート")
                 
                 guild_stats = {}
@@ -411,7 +414,6 @@ if guild_info:
                 df_guilds = df_guilds.sort_values(by="参加人数", ascending=False)
                 df_guilds.index = range(1, len(df_guilds) + 1)
                 
-                # ★ KUMAの行だけ「金色」にハイライトして見やすくする
                 def highlight_kuma(row):
                     if row['ギルド'].upper() == GUILD_NAME.upper():
                         return ['background-color: rgba(255, 215, 0, 0.2)'] * len(row)
@@ -419,14 +421,13 @@ if guild_info:
                 
                 st.dataframe(df_guilds.style.apply(highlight_kuma, axis=1), use_container_width=True)
                 
-                # --- 4. 参加プレイヤー詳細名簿 ---
                 with st.expander("👥 参加プレイヤー完全名簿 (ギルド別)"):
                     st.write("各ギルドの参加者一覧です。")
                     for g_name, gs in sorted(guild_stats.items(), key=lambda x: x[1]['player_count'], reverse=True):
                         st.markdown(f"**【 {g_name} 】** ({gs['player_count']}名)\n> {', '.join(sorted(gs['players_list']))}")
                         
         else:
-            st.info("直近20件のバトル内に、KUMAメンバーが5人以上参加しているZvZは見つかりませんでした。")
+            st.info("直近20件のバトル内に、KUMAメンバーが3人以上参加している集団戦は見つかりませんでした。")
 
 else:
     st.error(f"ギルド『{GUILD_NAME}』のデータが見つかりませんでした。公式APIが混雑している可能性があります。")
