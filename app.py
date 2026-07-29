@@ -94,7 +94,8 @@ def get_player_recent_history(player_id, event_type="kills", limit=3):
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            return response.json()
+            # ★ 修正ポイント: APIがlimitを無視して10件送ってくることがあるため、Python側で確実にカットする
+            return response.json()[:limit]
     except Exception:
         pass
     return []
@@ -210,7 +211,7 @@ if guild_info:
                         
                         st.divider()
                         
-                        # ★ 直近のキル履歴 (3件に短縮)
+                        # ★ 直近のキル履歴 (強制的に3件)
                         st.subheader("🔥 直近のキル (最新3件)")
                         recent_kills = get_player_recent_history(player_id, event_type="kills", limit=3)
                         if recent_kills:
@@ -231,7 +232,7 @@ if guild_info:
 
                         st.divider()
 
-                        # ★ 直近のデス履歴 (3件に短縮)
+                        # ★ 直近のデス履歴 (強制的に3件)
                         st.subheader("💀 直近のデス (最新3件)")
                         recent_deaths = get_player_recent_history(player_id, event_type="deaths", limit=3)
                         if recent_deaths:
