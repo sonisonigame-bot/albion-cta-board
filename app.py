@@ -16,51 +16,32 @@ if password != "sonikuma":
     st.stop()
 
 # --- ⏱️ Albion ライブ時計ウィジェット (HTML/JS) ---
-# パスワード解除後にサイドバーに表示します
-components.html("""
-<div style="font-family: sans-serif; padding: 15px; background: #262730; color: white; border-radius: 10px; text-align: center; border: 1px solid #444;">
-    <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 8px;">⏱️ Albion サーバー時間</div>
-    <div style="font-size: 1.6em; color: #ffbd45; font-weight: bold; letter-spacing: 2px;" id="utc-time">--:--:--</div>
-    <div style="font-size: 0.9em; color: #ccc; margin-top: 5px;" id="jst-time">日本時間: --:--:--</div>
-    <div style="margin-top: 12px; font-size: 0.85em; color: #00d2ff; background: rgba(0,210,255,0.1); padding: 5px; border-radius: 5px;" id="maint-timer">
-        メンテまで計算中...
+# 確実にサイドバーに表示されるように「with st.sidebar:」を追加
+with st.sidebar:
+    st.divider()
+    components.html("""
+    <div style="font-family: sans-serif; padding: 15px; background: #262730; color: white; border-radius: 10px; text-align: center; border: 1px solid #444;">
+        <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 8px;">⏱️ サーバー時間</div>
+        <div style="font-size: 1.6em; color: #ffbd45; font-weight: bold; letter-spacing: 2px;" id="utc-time">--:--:--</div>
+        <div style="font-size: 0.9em; color: #ccc; margin-top: 5px;" id="jst-time">日本時間: --:--:--</div>
     </div>
-</div>
-<script>
-    function updateTime() {
-        const now = new Date();
-        
-        // UTC時間の計算
-        const utc = now.toISOString().substring(11, 19);
-        document.getElementById("utc-time").innerText = "UTC " + utc;
+    <script>
+        function updateTime() {
+            const now = new Date();
+            
+            // UTC時間の計算
+            const utc = now.toISOString().substring(11, 19);
+            document.getElementById("utc-time").innerText = "UTC " + utc;
 
-        // 日本時間(JST)の計算
-        const jstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-        const jst = jstTime.toISOString().substring(11, 19);
-        document.getElementById("jst-time").innerText = "JST (日本) " + jst;
-
-        // メンテナンス(UTC 10:00)までのカウントダウン計算
-        let maint = new Date(now);
-        maint.setUTCHours(10, 0, 0, 0);
-        if(now > maint) {
-            maint.setUTCDate(maint.getUTCDate() + 1); // 10時を過ぎていたら翌日の10時
+            // 日本時間(JST)の計算
+            const jstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+            const jst = jstTime.toISOString().substring(11, 19);
+            document.getElementById("jst-time").innerText = "JST " + jst;
         }
-        const diff = maint - now;
-        const h = Math.floor(diff / (1000 * 60 * 60));
-        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const s = Math.floor((diff % (1000 * 60)) / 1000);
-        
-        // 0埋め処理
-        const hh = String(h).padStart(2, '0');
-        const mm = String(m).padStart(2, '0');
-        const ss = String(s).padStart(2, '0');
-        
-        document.getElementById("maint-timer").innerText = "⏰ メンテまで " + hh + "時間" + mm + "分" + ss + "秒";
-    }
-    setInterval(updateTime, 1000);
-    updateTime();
-</script>
-""", height=180)
+        setInterval(updateTime, 1000);
+        updateTime();
+    </script>
+    """, height=120)
 
 # メイン画面ヘッダー
 st.title("🐻 KUMA ギルドダッシュボード (Asiaサーバー)")
