@@ -146,7 +146,6 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    # ★ タブを4つに戻し、「個人検索」を復帰
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 総合ステータス＆分析", 
         "⚔️ 最近のキルボード",
@@ -177,19 +176,23 @@ if guild_info:
             analysis_events = get_analysis_events(guild_id)
         
         if analysis_events:
-            # ★ 活動時間帯グラフを復活
+            # ★ 修正：時間帯グラフを1時〜24時(0時)の順番で固定する
             st.markdown("##### 🕒 最も活発な時間帯 (JST)")
-            hours = {f"{h}時": 0 for h in range(24)}
+            hour_labels = [f"{h}時" for h in range(1, 24)] + ["24時"]
+            hours = {label: 0 for label in hour_labels}
+            
             for ev in analysis_events:
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 if jst_time != "Unknown":
                     hour_str = jst_time.split(" ")[1].split(":")[0]
-                    hours[f"{int(hour_str)}時"] += 1
+                    h_int = int(hour_str)
+                    label = "24時" if h_int == 0 else f"{h_int}時"
+                    hours[label] += 1
+            
             st.bar_chart(pd.DataFrame({"キル/デス発生数": list(hours.values())}, index=list(hours.keys())))
             
             st.divider()
 
-            # ★ ロール別メタ分析
             st.markdown("##### ⚔️ ギルド内 ロール別・武器メタTop5")
             st.write("直近150件の戦闘ログから、キルに関与した武器をロール別に集計しています。")
             role_weapons = {"🛡️ タンク": {}, "⚔️ 火力(近接)": {}, "🏹 火力(遠距離)": {}, "💚 ヒーラー": {}, "🌀 サポート/デバフ": {}}
@@ -252,7 +255,7 @@ if guild_info:
                     if html_images: st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
                 st.write("---")
 
-    # 【タブ3】プレイヤー詳細分析 (★復活★)
+    # 【タブ3】プレイヤー詳細分析
     with tab3:
         st.subheader("🔍 プレイヤー詳細分析")
         search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
@@ -299,13 +302,12 @@ if guild_info:
     # 【タブ4】🛡️ 集団戦 バトルレポート
     with tab4:
         st.subheader("🛡️ 集団戦 バトルレポート")
-        st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。(平均IPの項目はバグ対策のため削除しました)")
+        st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。(平均IPなどの無効項目は整理しました)")
         
         with st.spinner("直近のバトルを探索中... (最大50件のバトルを分析します)"):
             group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=3)
             
         if group_battles:
-            # ★ 最新順（時間が新しい順）に並び替える処理
             group_battles = sorted(group_battles, key=lambda x: x["summary"].get("startTime", ""), reverse=True)
             
             battle_options = {}
@@ -353,7 +355,6 @@ if guild_info:
                         "ギルド": g, "人数": gs['count'], "キル": gs['kills'], "デス": gs['deaths'], 
                         "K/D": f"{(gs['kills'] / gs['deaths']):.2f}" if gs['deaths'] > 0 else f"{gs['kills']}.00",
                         "名声": gs['fame']
-                        # ★ 平均IPは削除しました
                     })
                 
                 df_guilds = pd.DataFrame(g_rows).sort_values(by="人数", ascending=False)
@@ -364,27 +365,27 @@ if guild_info:
                 
                 st.dataframe(df_guilds.style.apply(highlight_kuma, axis=1), use_container_width=True)
                 
-                # --- KUMA参加プレイヤー詳細データテーブル ---
+                # --- ★修正：0になる項目を削除し、「使用武器」と「個別K/D」を追加 ---
                 st.markdown("#### 👥 参加プレイヤー詳細 (KUMAメンバー)")
                 kuma_players = []
                 for p in players:
                     if p.get("guildName", "").upper() == GUILD_NAME.upper():
-                        w_type = p.get("equipment", {}).get("mainhand", {}).get("type", "")
-                        role = categorize_weapon(w_type).split(" ")[1] if w_type else "不明"
+                        w_type = p.get("equipment", {}).get("mainhand", {}).get("type", "なし")
+                        p_kills = p.get("kills", 0)
+                        p_deaths = p.get("deaths", 0)
+                        indiv_kd = p_kills / p_deaths if p_deaths > 0 else float(p_kills)
                         
                         kuma_players.append({
                             "プレイヤー名": p.get("name"),
-                            "ロール推定": role,
-                            # ★ 平均IPは削除しました
-                            "キル": p.get("kills", 0),
-                            "デス": p.get("deaths", 0),
-                            "与ダメ (DMG)": int(p.get("damageDone", 0)),
-                            "ヒール (HEAL)": int(p.get("supportHealingDone", 0)),
+                            "使用武器": w_type,
+                            "キル": p_kills,
+                            "デス": p_deaths,
+                            "個別 K/D": round(indiv_kd, 2),
                             "キル名声": p.get("killFame", 0)
                         })
                 
                 if kuma_players:
-                    df_kp = pd.DataFrame(kuma_players).sort_values(by="与ダメ (DMG)", ascending=False)
+                    df_kp = pd.DataFrame(kuma_players).sort_values(by="キル", ascending=False)
                     df_kp.index = range(1, len(df_kp) + 1)
                     st.dataframe(df_kp, use_container_width=True)
                 else:
