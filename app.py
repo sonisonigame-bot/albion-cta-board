@@ -194,6 +194,7 @@ if guild_info:
             st.divider()
 
             st.markdown("##### ⚔️ ギルド内 ロール別・武器メタTop5")
+            st.write("直近150件の戦闘ログから、キルに関与した武器をロール別に集計しています。")
             role_weapons = {"🛡️ タンク": {}, "⚔️ 火力(近接)": {}, "🏹 火力(遠距離)": {}, "💚 ヒーラー": {}, "🌀 サポート/デバフ": {}}
             
             for ev in analysis_events:
@@ -298,7 +299,7 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】🛡️ 集団戦 バトルレポート (★構成分析＆ギルド選択追加★)
+    # 【タブ4】🛡️ 集団戦 バトルレポート
     with tab4:
         st.subheader("🛡️ 集団戦 バトルレポート")
         st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。")
@@ -366,13 +367,10 @@ if guild_info:
                 
                 st.divider()
                 
-                # --- ★追加：ギルド選択式 構成バランスグラフ＆メンバー詳細表 ---
-                st.markdown("#### 📊 ギルド別 構成バランス ＆ メンバー詳細")
+                # --- ★修正：取得できない装備とロールの情報を削除した、シンプルなギルド別メンバー表 ---
+                st.markdown("#### 👥 ギルド別 参加メンバー詳細")
                 
-                # ドロップダウンリスト用にギルド名を取得
                 guild_list = list(guild_stats.keys())
-                
-                # 初期選択を「KUMA」にするためのインデックス検索
                 default_idx = 0
                 for i, g in enumerate(guild_list):
                     if g.upper() == GUILD_NAME.upper():
@@ -382,34 +380,19 @@ if guild_info:
                 selected_guild = st.selectbox("分析したいギルドを選択してください", guild_list, index=default_idx)
                 
                 target_players = []
-                role_counts = {"🛡️ タンク": 0, "⚔️ 火力(近接)": 0, "🏹 火力(遠距離)": 0, "💚 ヒーラー": 0, "🌀 サポート/デバフ": 0, "⚪ その他": 0, "不明": 0}
                 
                 for p in players:
                     g_name = p.get("guildName", "無所属")
                     if not g_name: g_name = "無所属"
                     
                     if g_name == selected_guild:
-                        w_type = p.get("equipment", {}).get("mainhand", {}).get("type", "")
-                        role = categorize_weapon(w_type)
-                        role_counts[role] += 1
-                        
                         target_players.append({
                             "プレイヤー名": p.get("name"),
-                            "ロール推定": role.split(" ")[1] if role != "不明" else "不明",
-                            "使用武器": w_type if w_type else "",  # 武器なしの場合は空文字
                             "キル": p.get("kills", 0),
                             "デス": p.get("deaths", 0),
                             "キル名声": p.get("killFame", 0)
                         })
                 
-                # 0人のロールを除外してグラフを表示
-                active_roles = {k: v for k, v in role_counts.items() if v > 0}
-                if active_roles:
-                    st.markdown(f"##### 📈 【 {selected_guild} 】 の編成グラフ")
-                    df_roles = pd.DataFrame({"人数": list(active_roles.values())}, index=list(active_roles.keys()))
-                    st.bar_chart(df_roles)
-                
-                # メンバー詳細表の表示
                 if target_players:
                     st.markdown(f"##### 👥 【 {selected_guild} 】 の参加メンバー詳細")
                     df_tp = pd.DataFrame(target_players).sort_values(by="キル", ascending=False)
