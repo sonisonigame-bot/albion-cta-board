@@ -61,7 +61,6 @@ def convert_time(time_str):
     except Exception:
         return "Unknown", "Unknown"
 
-# ★ 装備をゲーム内レイアウト順にフル表示する関数に進化
 def render_equipment_html(equipment_dict):
     slots = ['Bag', 'Head', 'Cape', 'MainHand', 'Armor', 'OffHand', 'Potion', 'Shoes', 'Food', 'Mount']
     html_images = "<div style='display: flex; flex-wrap: wrap; gap: 4px; max-width: 200px;'>"
@@ -74,12 +73,10 @@ def render_equipment_html(equipment_dict):
             count_html = f"<div style='position:absolute; bottom:0; right:4px; font-size:12px; font-weight:bold; color:white; text-shadow: 1px 1px 2px black;'>{count}</div>" if count > 1 else ""
             html_images += f"<div style='position:relative;'><img src='{img_url}' width='45' title='{item_name}' style='background-color: #2c2c2c; border-radius: 5px; border: 1px solid #555;'>{count_html}</div>"
         else:
-            # 空のスロット
             html_images += f"<div style='width: 45px; height: 45px; background-color: #1a1a1a; border-radius: 5px; border: 1px solid #333;'></div>"
     html_images += "</div>"
     return html_images
 
-# ★ バッグの中身（ドロップ品）を表示する関数
 def render_inventory_html(inventory_list):
     if not inventory_list: return ""
     html_images = "<div style='display: flex; flex-wrap: wrap; gap: 4px;'>"
@@ -95,7 +92,6 @@ def render_inventory_html(inventory_list):
     html_images += "</div>"
     return html_images if has_items else ""
 
-# ★ アシスト（参加者）を表示する関数
 def render_participants(participants_list):
     if not participants_list or len(participants_list) <= 1:
         return "⚔️ **Solo Kill** (1対1の戦い)"
@@ -147,10 +143,11 @@ def get_guild_members(guild_id):
     except: pass
     return []
 
+# ★ 軽量化対応: limitをデフォルト10に変更
 @st.cache_data(ttl=60)
-def get_guild_events(guild_id, offset=0):
+def get_guild_events(guild_id, offset=0, limit=10):
     try:
-        res = requests.get(f"{BASE_URL}/events?limit=20&offset={offset}&guildId={guild_id}", timeout=10)
+        res = requests.get(f"{BASE_URL}/events?limit={limit}&offset={offset}&guildId={guild_id}", timeout=10)
         if res.status_code == 200: return res.json()
     except: pass
     return []
@@ -308,7 +305,7 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード (★超進化版★)
+    # 【タブ2】最新のキルボード (★軽量化版★)
     with tab2:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
         
@@ -316,7 +313,8 @@ if guild_info:
         
         display_events = []
         if search_filter:
-            st.caption("※直近150件のログから抽出しています。")
+            # ★ 検索結果の最大表示数を 10件 に軽量化
+            st.caption("※直近のログから最大10件を抽出して表示します。")
             with st.spinner("検索中..."):
                 all_events = get_analysis_events(guild_id)
                 for ev in all_events:
@@ -324,10 +322,11 @@ if guild_info:
                     v_name = ev.get("Victim", {}).get("Name", "")
                     if search_filter.upper() in k_name.upper() or search_filter.upper() in v_name.upper():
                         display_events.append(ev)
-                display_events = display_events[:50]
+                display_events = display_events[:10]
         else:
             selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
-            display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 20)
+            # ★ 1ページの取得・表示数を 10件 に軽量化
+            display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 10, limit=10)
         
         if display_events:
             for ev in display_events:
@@ -335,7 +334,6 @@ if guild_info:
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 v_fame = ev.get("TotalVictimKillFame", 0)
                 
-                # アライアンスのフォーマット
                 k_alliance = f"[{killer.get('AllianceName')}] " if killer.get('AllianceName') else ""
                 v_alliance = f"[{victim.get('AllianceName')}] " if victim.get('AllianceName') else ""
                 
@@ -352,11 +350,9 @@ if guild_info:
                     
                 st.caption(f"🕒 {jst_time} ｜ 🌟 取得名声: {v_fame:,}")
                 
-                # アシスト表示
                 participants = ev.get("Participants", [])
                 st.markdown(render_participants(participants))
                 
-                # 装備とインベントリ表示
                 eq_html = render_equipment_html(victim.get("Equipment", {}))
                 inv_html = render_inventory_html(victim.get("Inventory", []))
                 
