@@ -169,9 +169,9 @@ def get_battle_details(battle_id):
     except: pass
     return None
 
-# ★ 修正: 最大100件まで探索を拡大
+# ★ 元の 3人以上 (min_players=3) に戻す
 @st.cache_data(ttl=180)
-def get_group_battles(guild_id, guild_name, min_players=1):
+def get_group_battles(guild_id, guild_name, min_players=3):
     valid_battles = []
     for offset in [0, 50]:
         url = f"{BASE_URL}/battles?limit=50&offset={offset}&guildId={guild_id}"
@@ -419,10 +419,10 @@ if guild_info:
     # 【タブ4】🛡️ バトルレポート
     with tab4:
         st.subheader("🛡️ バトルレポート")
-        st.write("※ KUMAが参加したバトルを抽出しています。(公式APIがバトル判定した戦闘のみ表示されます)")
+        st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。(公式APIがバトル判定した戦闘のみ表示されます)")
         
         with st.spinner("直近のバトルを探索中... (最大100件のバトルを分析します)"):
-            group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=1)
+            group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=3)
             
         if group_battles:
             group_battles = sorted(group_battles, key=lambda x: x["summary"].get("startTime", ""), reverse=True)
@@ -517,7 +517,7 @@ if guild_info:
                     st.write("詳細データが見つかりませんでした。")
                         
         else:
-            st.info("直近100件のバトル内に、KUMAが参加している判定済みバトルは見つかりませんでした。(公式APIの更新遅延の可能性があります)")
+            st.info("直近100件のバトル内に、KUMAが3人以上参加している判定済みバトルは見つかりませんでした。(公式APIの更新遅延の可能性があります)")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
