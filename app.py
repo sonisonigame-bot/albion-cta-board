@@ -3,7 +3,7 @@ import streamlit.components.v1 as components
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
-import plotly.express as px  # ★ 円グラフを描画するためのライブラリを追加
+import plotly.express as px
 
 # 画面設定
 st.set_page_config(page_title="🐻KUMA Albion Dashboard", layout="wide")
@@ -46,6 +46,8 @@ st.write("Albion Onlineの公式データから自動取得しています。")
 # --- 1. API設定 ---
 BASE_URL = "https://gameinfo-sgp.albiononline.com/api/gameinfo"
 RENDER_URL = "https://render.albiononline.com/v1/item"
+# ★ 追加: アイテム市場価格を取得するための有志API (Asia/Eastサーバー用)
+MARKET_API_URL = "https://east.albion-online-data.com/api/v2/stats/prices"
 GUILD_NAME = "KUMA"
 
 # --- 2. ユーティリティ・データ取得関数 ---
@@ -117,6 +119,48 @@ def categorize_weapon(w_type):
     if any(x in w for x in ['_BOW', '_CROSSBOW', '_FIRESTAFF', '_FROSTSTAFF']): return "🏹 火力(遠距離)"
     if any(x in w for x in ['_SWORD', '_AXE', '_DAGGER', '_SPEAR', '_QUARTERSTAFF', '_KNUCKLES']): return "⚔️ 火力(近接)"
     return "⚪ その他"
+
+# ★ 追加: 市場価格を取得する関数 (1時間はキャッシュ)
+@st.cache_data(ttl=3600)
+def get_market_prices(item_ids):
+    if not item_ids: return {}
+    prices = {}
+    item_ids = list(set(item_ids))
+    chunk_size = 100 # URLが長すぎないように100個ずつAPIに投げる
+    for i in range(0, len(item_ids), chunk_size):
+        chunk = item_ids[i:i+chunk_size]
+        ids_str = ",".join(chunk)
+        url = f"{MARKET_API_URL}/{ids_str}"
+        try:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                for d in res.json():
+                    iid = d.get("item_id")
+                    p = d.get("sell_price_min", 0)
+                    if p > 0: # 0シルバーのデータは無視
+                        if iid not in prices or prices[iid] == 0:
+                            prices[iid] = p
+                        else:
+                            # 複数の都市のデータが返ってくる場合、最も安い価格を採用して堅実に計算
+                            if p < prices[iid]:
+                                prices[iid] = p
+        except: pass
+    return prices
+
+# ★ 追加: 1つのキルの推定被害総額（装備＋インベントリ）を計算する関数
+def calculate_loot_value(victim, price_dict):
+    total = 0
+    for slot, item in victim.get("Equipment", {}).items():
+        if item:
+            iid = item.get("Type")
+            count = item.get("Count", 1)
+            total += price_dict.get(iid, 0) * count
+    for item in victim.get("Inventory", []):
+        if item:
+            iid = item.get("Type")
+            count = item.get("Count", 1)
+            total += price_dict.get(iid, 0) * count
+    return total
 
 @st.cache_data(ttl=300)
 def get_guild_info(guild_name):
@@ -355,10 +399,27 @@ if guild_info:
             display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 10, limit=10)
         
         if display_events:
+            # ★ 描画前に、被害者(Victim)の持っていたすべてのアイテムIDを抽出して一括で市場価格を取得
+            with st.spinner("💰 ロスト品の市場価格を相場APIから取得中..."):
+                all_item_ids = []
+                for ev in display_events:
+                    v_eq = ev.get("Victim", {}).get("Equipment", {})
+                    v_inv = ev.get("Victim", {}).get("Inventory", [])
+                    for slot, item in v_eq.items():
+                        if item: all_item_ids.append(item.get("Type"))
+                    for item in v_inv:
+                        if item: all_item_ids.append(item.get("Type"))
+                
+                # 市場価格の辞書を作成
+                market_prices = get_market_prices(all_item_ids)
+
             for ev in display_events:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 v_fame = ev.get("TotalVictimKillFame", 0)
+                
+                # ★ 推定被害総額の計算
+                total_silver = calculate_loot_value(victim, market_prices)
                 
                 k_alliance = f"[{killer.get('AllianceName')}] " if killer.get('AllianceName') else ""
                 v_alliance = f"[{victim.get('AllianceName')}] " if victim.get('AllianceName') else ""
@@ -374,7 +435,8 @@ if guild_info:
                 else:
                     st.error(f"💀 **デス** : **{v_disp}** (IP: {v_ip}) ⚔️ 倒された相手 ➡ **{k_disp}** (IP: {k_ip})")
                     
-                st.caption(f"🕒 {jst_time} ｜ 🌟 取得名声: {v_fame:,}")
+                # ★ キャプションにシルバー額を追加
+                st.caption(f"🕒 {jst_time} ｜ 🌟 取得名声: {v_fame:,} ｜ **💰 推定ロスト総額: {total_silver:,} シルバー**")
                 
                 participants = ev.get("Participants", [])
                 st.markdown(render_participants(participants))
@@ -559,22 +621,35 @@ if guild_info:
         if not recent_events:
             st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
         else:
+            # ★ 市場価格の事前一括取得
+            with st.spinner("💰 1時間分のロスト品の市場価格を解析中..."):
+                all_item_ids_hour = []
+                for ev in recent_events:
+                    v_eq = ev.get("Victim", {}).get("Equipment", {})
+                    v_inv = ev.get("Victim", {}).get("Inventory", [])
+                    for slot, item in v_eq.items():
+                        if item: all_item_ids_hour.append(item.get("Type"))
+                    for item in v_inv:
+                        if item: all_item_ids_hour.append(item.get("Type"))
+                
+                market_prices_hour = get_market_prices(all_item_ids_hour)
+
             kuma_kills, kuma_deaths = 0, 0
             gained_fame, lost_fame = 0, 0
+            gained_silver, lost_silver = 0, 0  # ★ シルバー計算用
+            
             enemy_stats, enemy_alliance_stats, kuma_stats = {}, {}, {}
             weapon_stats, enemy_victim_stats = {}, {}
-            
-            # ★ KUMAメンバーの役割（ロール）集計用辞書
             kuma_player_roles = {}
             
             for ev in recent_events:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
                 fame = ev.get("TotalVictimKillFame", 0)
+                loot_value = calculate_loot_value(victim, market_prices_hour) # ★ そのキルの被害総額
                 
                 k_guild_raw = killer.get("GuildName", "")
                 v_guild_raw = victim.get("GuildName", "")
                 
-                # --- ロール取得用ロジック ---
                 if k_guild_raw.upper() == GUILD_NAME.upper():
                     k_name = killer.get("Name", "Unknown")
                     w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
@@ -585,10 +660,11 @@ if guild_info:
                     w_type = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
                     if w_type: kuma_player_roles[v_name] = categorize_weapon(w_type)
                 
-                # --- キルログの集計 ---
                 if k_guild_raw.upper() == GUILD_NAME.upper():
+                    # --- KUMAのキル ---
                     kuma_kills += 1
                     gained_fame += fame
+                    gained_silver += loot_value # ★ 奪ったシルバー加算
                     
                     k_name = killer.get("Name", "Unknown")
                     if k_name not in kuma_stats:
@@ -626,9 +702,10 @@ if guild_info:
                     enemy_victim_stats[v_disp]["奪った名声"] += fame
                         
                 else:
-                    # --- デスログの集計 ---
+                    # --- KUMAのデス ---
                     kuma_deaths += 1
                     lost_fame += fame
+                    lost_silver += loot_value # ★ 奪われたシルバー加算
                     
                     v_name = victim.get("Name", "Unknown")
                     if v_name not in kuma_stats:
@@ -651,13 +728,13 @@ if guild_info:
                         enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
                     enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
             
-            # --- トップのステータス表示 ---
+            # --- トップのステータス表示 (★レイアウト変更) ---
             st.divider()
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("🔥 1時間の合計キル", f"{kuma_kills} キル")
-            c2.metric("💀 1時間の合計デス", f"{kuma_deaths} デス")
-            c3.metric("🌟 奪った名声 (Fame)", f"{gained_fame:,}")
-            c4.metric("📉 奪われた名声 (Fame)", f"{lost_fame:,}")
+            st.markdown("#### ⚔️ 1時間の全体戦果")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("🔥 キル / 💀 デス", f"{kuma_kills} / {kuma_deaths}")
+            m2.metric("🌟 奪った名声 / 📉 ロスト", f"{gained_fame:,} / {lost_fame:,}")
+            m3.metric("💰 奪った推定シルバー / 💸 ロスト", f"{gained_silver:,} / {lost_silver:,}")
             st.divider()
             
             # --- 上段レイアウト: 敵対勢力（同盟・ギルド） ---
@@ -722,7 +799,6 @@ if guild_info:
                 else:
                     st.caption("武器データなし")
                     
-            # ★ ここから新機能: ロール円グラフ描画 ★
             with col_p:
                 st.markdown("#### 📊 KUMAメンバーの構成 (ロール)")
                 if kuma_player_roles:
@@ -731,7 +807,6 @@ if guild_info:
                         role_counts[r] = role_counts.get(r, 0) + 1
                         
                     df_roles = pd.DataFrame(list(role_counts.items()), columns=["ロール", "人数"])
-                    # Plotlyを使って美しいドーナツグラフを作成
                     fig = px.pie(
                         df_roles, 
                         values="人数", 
