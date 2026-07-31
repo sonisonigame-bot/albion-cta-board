@@ -143,7 +143,6 @@ def calculate_loot_value(victim, price_dict):
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ タイムライン生成専用の関数 (ギルド名・同盟名を表示)
 def generate_timeline_html(events, guild_name):
     kuma_kill_logs = []
     kuma_death_logs = []
@@ -187,7 +186,6 @@ def generate_timeline_html(events, guild_name):
             
     return kuma_kill_logs, kuma_death_logs
 
-# ★ 詳細レポート共通関数 ★
 def render_battle_summary(events, market_prices):
     kuma_kills, kuma_deaths = 0, 0
     gained_fame, lost_fame, gained_silver, lost_silver = 0, 0, 0, 0
@@ -195,7 +193,6 @@ def render_battle_summary(events, market_prices):
     kuma_players = {}
     enemy_players = {}
     
-    # 参加者全員の情報を集める
     def track_player(p_obj):
         if not p_obj or not p_obj.get("Name"): return
         name = p_obj["Name"]
@@ -226,7 +223,6 @@ def render_battle_summary(events, market_prices):
         for p in ev.get("Participants", []):
             track_player(p)
             
-    # 敵対ギルド・同盟の集計
     enemy_stats = {}
     enemy_alliance_stats = {}
     for name, info in enemy_players.items():
@@ -308,7 +304,6 @@ def render_battle_summary(events, market_prices):
             if e_guild_disp in enemy_stats: enemy_stats[e_guild_disp]["やられた数"] += 1
             if e_alliance_disp in enemy_alliance_stats: enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
 
-    # --- 描画処理 ---
     kuma_p_count = len(kuma_players)
     enemy_p_count = len(enemy_players)
     kuma_avg_ip = int(sum(info["IP"] for info in kuma_players.values()) / kuma_p_count) if kuma_p_count > 0 else 0
@@ -449,7 +444,6 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
-# ★ 汎用的な時間指定ができる関数に変更しました（最大1000件探索）
 @st.cache_data(ttl=60)
 def get_recent_events(guild_id, hours=1):
     events = []
@@ -567,7 +561,6 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    # ★ タブの順番を最適化
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 総合ステータス＆分析", 
         "🛡️ バトルレポート (新システム)",
@@ -593,7 +586,6 @@ if guild_info:
         col4.metric("⚖️ ギルド総合 K/D", f"{kd_ratio:.2f}")
         st.divider()
 
-        # ★ トップページに過去6時間のタイムラインを配置
         st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
         with st.spinner("直近6時間のタイムラインを生成中..."):
             recent_events_tab1 = get_recent_events(guild_id, hours=6)
@@ -766,7 +758,7 @@ if guild_info:
                 with col_i: st.markdown(f"**🎒 ロストしたアイテム:**<br>{inv_html}" if inv_html else "**🎒 ロストしたアイテム:** 空っぽ", unsafe_allow_html=True)
                 st.write("---")
 
-    # 【タブ5】🔍 プレイヤー詳細分析
+    # ★ 復元完了！【タブ5】🔍 プレイヤー詳細分析
     with tab5:
         st.subheader("🔍 プレイヤー詳細分析")
         search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
@@ -783,6 +775,34 @@ if guild_info:
                         c1.metric("🔥 キルフェイム", f"{k_fame:,}")
                         c2.metric("💀 デスフェイム", f"{d_fame:,}")
                         c3.metric("⚖️ K/D 比", f"{k_fame / d_fame if d_fame > 0 else 0:.2f}")
+                        
+                        st.divider()
+                        
+                        st.subheader("🔥 直近のキル (最新3件)")
+                        for kill in get_player_recent_history(p_id, "kills", 3):
+                            k_eq = render_equipment_html(kill.get("Killer", {}).get("Equipment", {}))
+                            v_eq = render_equipment_html(kill.get("Victim", {}).get("Equipment", {}))
+                            _, jst_time = convert_time(kill.get("TimeStamp", ""))
+                            st.info(f"⚔️ 倒した相手: **{kill.get('Victim', {}).get('Name', 'Unknown')}** ｜ 🕒 **{jst_time}**")
+                            col_k, col_v = st.columns(2)
+                            with col_k:
+                                st.markdown(f"**自分の装備:**<br>{k_eq}", unsafe_allow_html=True)
+                            with col_v:
+                                st.markdown(f"**相手の装備 (名声: {kill.get('TotalVictimKillFame', 0):,}):**<br>{v_eq}", unsafe_allow_html=True)
+                            st.write("")
+                            
+                        st.subheader("💀 直近のデス (最新3件)")
+                        for death in get_player_recent_history(p_id, "deaths", 3):
+                            k_eq = render_equipment_html(death.get("Killer", {}).get("Equipment", {}))
+                            v_eq = render_equipment_html(death.get("Victim", {}).get("Equipment", {}))
+                            _, jst_time = convert_time(death.get("TimeStamp", ""))
+                            st.error(f"⚔️ 倒された相手: **{death.get('Killer', {}).get('Name', 'Unknown')}** ｜ 🕒 **{jst_time}**")
+                            col_k, col_v = st.columns(2)
+                            with col_k:
+                                st.markdown(f"**相手の装備:**<br>{k_eq}", unsafe_allow_html=True)
+                            with col_v:
+                                st.markdown(f"**ロストした装備 (相手の名声: {death.get('TotalVictimKillFame', 0):,}):**<br>{v_eq}", unsafe_allow_html=True)
+                            st.write("")
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
