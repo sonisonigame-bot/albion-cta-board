@@ -350,10 +350,8 @@ def render_battle_summary(events, market_prices, guild_id, guild_name, kuma_memb
     enemy_avg_ip = int(sum(info["IP"] for info in enemy_players.values()) / enemy_p_count) if enemy_p_count > 0 else 0
 
     st.markdown(f"#### ⚔️ 全体戦果 (KUMA **{kuma_p_count}名** 🆚 敵軍 **{enemy_p_count}名**)")
-    # ★ シルバー表示をここに移動
     st.caption(f"🛡️ **平均IP:** KUMA `{kuma_avg_ip}` ｜ 敵軍 `{enemy_avg_ip}`  |  💰 **推定シルバー (奪/失):** `{gained_silver:,}` / `{lost_silver:,}`")
     
-    # 4列から3列に変更
     m1, m2, m3 = st.columns(3)
     m1.metric("🔥 キル / 💀 デス", f"{kuma_kills} / {kuma_deaths}")
     m2.metric("👥 参加人数 (KUMA / 敵)", f"{kuma_p_count} / {enemy_p_count}")
@@ -468,24 +466,7 @@ def get_guild_members(guild_id):
     except: pass
     return []
 
-@st.cache_data(ttl=60)
-def get_guild_events(guild_id, offset=0, limit=10):
-    try:
-        res = requests.get(f"{BASE_URL}/events?limit={limit}&offset={offset}&guildId={guild_id}", timeout=10)
-        if res.status_code == 200: return res.json()
-    except: pass
-    return []
-
-@st.cache_data(ttl=300)
-def get_analysis_events(guild_id):
-    events = []
-    for offset in [0, 50, 100]:
-        try:
-            res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
-            if res.status_code == 200: events.extend(res.json())
-        except: pass
-    return events
-
+# ★ 最強探索エンジン（並列デスログ強制回収機能付き） ★
 @st.cache_data(ttl=60)
 def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_events=5000):
     kuma_member_names = set(kuma_members_tuple)
@@ -658,7 +639,7 @@ if guild_info:
         st.divider()
 
         st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
-        with st.spinner("直近6時間のタイムラインを生成中... (※大容量モード作動中)"):
+        with st.spinner("直近6時間のタイムラインを生成中... (※超高速並列回収モード作動中)"):
             recent_events_tab1 = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=6, max_events=5000)
             
         if recent_events_tab1:
@@ -681,14 +662,12 @@ if guild_info:
         st.divider()
             
         st.subheader("📈 ギルド行動 ＆ メタ分析")
-        with st.spinner("行動データを集計中..."):
-            analysis_events = get_analysis_events(guild_id)
         
-        if analysis_events:
+        if recent_events_tab1:
             st.markdown("##### 🕒 最も活発な時間帯 (JST)")
             hour_labels = [f"{h:02d}時" for h in range(1, 25)]
             hours = {label: 0 for label in hour_labels}
-            for ev in analysis_events:
+            for ev in recent_events_tab1:
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 if jst_time != "Unknown":
                     hour_str = jst_time.split(" ")[1].split(":")[0]
@@ -780,20 +759,24 @@ if guild_info:
     # 【タブ4】⚔️ 最近のキルボード
     with tab4:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
+        st.write("※ 独自アルゴリズムで修復・回収した「過去24時間（最大5000件）」のログから表示しています。")
         search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
         display_events = []
+        
+        with st.spinner("全ログデータを展開中..."):
+            all_board_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=24, max_events=5000)
+
         if search_filter:
-            with st.spinner("検索中..."):
-                all_events = get_analysis_events(guild_id)
-                for ev in all_events:
-                    k_name = ev.get("Killer", {}).get("Name", "")
-                    v_name = ev.get("Victim", {}).get("Name", "")
-                    if search_filter.upper() in k_name.upper() or search_filter.upper() in v_name.upper():
-                        display_events.append(ev)
-                display_events = display_events[:10]
+            for ev in all_board_events:
+                k_name = ev.get("Killer", {}).get("Name", "")
+                v_name = ev.get("Victim", {}).get("Name", "")
+                if search_filter.upper() in k_name.upper() or search_filter.upper() in v_name.upper():
+                    display_events.append(ev)
+            display_events = display_events[:15] # 検索時は最大15件
         else:
-            selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
-            display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 10, limit=10)
+            selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], horizontal=True)
+            start_idx = (selected_page - 1) * 10
+            display_events = all_board_events[start_idx : start_idx + 10]
         
         if display_events:
             with st.spinner("💰 ロスト品の市場価格を相場APIから取得中..."):
