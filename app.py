@@ -165,7 +165,7 @@ def is_kuma(p_obj, guild_id, guild_name, kuma_member_names):
     if name and str(name).upper() in kuma_member_names: return True
     return False
 
-# ★ タイムライン生成専用関数 (レイアウト修正＆アシスト表記)
+# タイムライン生成専用関数
 def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
     kuma_kill_logs = []
     kuma_death_logs = []
@@ -185,7 +185,6 @@ def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
         is_k_kuma = is_kuma(killer, guild_id, guild_name, kuma_member_names)
         is_v_kuma = is_kuma(victim, guild_id, guild_name, kuma_member_names)
         
-        # 参加者にKUMAがいるかどうか
         kuma_assistant_name = None
         if not is_k_kuma and not is_v_kuma:
             for p in ev.get("Participants", []):
@@ -212,14 +211,11 @@ def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
         v_disp = format_player(victim)
 
         if is_k_kuma and not is_v_kuma:
-            # キルログ (KUMA側のアシスト表記を追加)
             assist_tag = f" <span style='color:#2ecc71; font-size:12px;'>(KUMAアシスト: {kuma_assistant_name})</span>" if kuma_assistant_name else ""
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span>{assist_tag} <span style='color:#e74c3c; margin: 0 4px;'>⚔️</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span>{assist_tag} <span style='color:#3498db; margin: 0 4px;'>▶キル▶</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
             kuma_kill_logs.append(log_str)
-            
         elif is_v_kuma:
-            # デスログ (完全に左が敵Killer、右が味方Victimになるように統一)
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>⚔️</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>◀デス◀</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span></div>"
             kuma_death_logs.append(log_str)
             
     return kuma_kill_logs, kuma_death_logs
@@ -488,15 +484,15 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
-# ★ 追加: 公式APIが隠す「デスログ」を並列処理で強制的に回収する最強関数 ★
+# ★ 限界突破！探索上限を5000件（100ページ）に拡大した超取得関数 ★
 @st.cache_data(ttl=60)
-def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_events=1000):
+def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_events=5000):
     kuma_member_names = set(kuma_members_tuple)
     events = []
     now = datetime.now(timezone.utc)
     limit_time = now - timedelta(hours=hours)
     
-    # ① まずはギルドの公式キルログを取得
+    # ① ギルドの公式キルログを取得（最大5000件）
     for offset in range(0, max_events, 50):
         try:
             res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
@@ -511,6 +507,7 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
                         if ev_time >= limit_time: events.append(ev)
                         else: old_count += 1 
                     except: pass
+                # 全て古いデータなら探索終了
                 if old_count == len(data): break
             else: break
         except: break
@@ -528,7 +525,8 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
             if p.get("Id") and is_kuma(p, guild_id, guild_name, kuma_member_names):
                 active_kuma_ids.add(p["Id"])
                 
-    active_kuma_ids = list(active_kuma_ids)[:50] # 負荷対策で上限50人
+    # ★ 限界突破！デスログ裏回収の対象を最大150人（ほぼ全参加者）に引き上げ
+    active_kuma_ids = list(active_kuma_ids)[:150] 
     
     # ③ APIが隠した純粋な「デスログ」を個人の履歴から並列で強制回収
     extra_deaths = []
@@ -540,7 +538,8 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
         return []
 
     if active_kuma_ids:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        # 10スレッドの高速並列処理で150人分のデスログを一瞬で回収
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = executor.map(fetch_deaths, active_kuma_ids)
             for p_deaths in results:
                 for d in p_deaths:
@@ -561,11 +560,10 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
 
 @st.cache_data(ttl=180)
 def generate_custom_battles(guild_id, guild_name, kuma_members_tuple, time_limit_hours=24):
-    # 最新の強力な関数（デスログ完全回収版）を使って24時間分のログを引っ張る
-    events = get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=time_limit_hours, max_events=2000)
+    # バトルレポートの探索も5000件フルパワーに拡張
+    events = get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=time_limit_hours, max_events=5000)
     if not events: return []
 
-    # 時系列順（古い順）に並べ替えてバトルを判定
     events_sorted = sorted(events, key=lambda x: datetime.strptime(x["TimeStamp"][:19], "%Y-%m-%dT%H:%M:%S"))
     battles = []
     current_battle = []
@@ -591,7 +589,6 @@ def generate_custom_battles(guild_id, guild_name, kuma_members_tuple, time_limit
     valid_battles = []
     for b in battles:
         players = set()
-        kuma_member_names = set(kuma_members_tuple)
         for ev in b:
             if ev.get("Killer", {}).get("Name"): players.add(ev["Killer"]["Name"])
             if ev.get("Victim", {}).get("Name"): players.add(ev["Victim"]["Name"])
@@ -663,20 +660,21 @@ if guild_info:
         st.divider()
 
         st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
-        with st.spinner("直近6時間のタイムラインを生成中..."):
-            recent_events_tab1 = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=6)
+        with st.spinner("直近6時間のタイムラインを生成中... (※大容量モード作動中)"):
+            # ★ 限界突破: max_eventsを5000に設定して6時間のログを確実に取り切る
+            recent_events_tab1 = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=6, max_events=5000)
             
         if recent_events_tab1:
             kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, guild_id, GUILD_NAME, kuma_member_names)
             col_kl1, col_dl1 = st.columns(2)
             with col_kl1:
-                st.markdown("**🔥 KUMAのキルログ**")
+                st.markdown(f"**🔥 KUMAのキルログ ({len(kill_logs_t1)}件)**")
                 if kill_logs_t1:
                     st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(kill_logs_t1) + "</div>", unsafe_allow_html=True)
                 else:
                     st.write("直近6時間のキルログはありません")
             with col_dl1:
-                st.markdown("**💀 KUMAのデスログ**")
+                st.markdown(f"**💀 KUMAのデスログ ({len(death_logs_t1)}件)**")
                 if death_logs_t1:
                     st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(death_logs_t1) + "</div>", unsafe_allow_html=True)
                 else:
@@ -718,7 +716,7 @@ if guild_info:
         st.subheader("🛡️ 新バトルレポート")
         st.write("公式APIの更新遅延を回避するため、キルログから「戦闘が5分空いたら別バトル」という独自ロジックで集団戦を自動生成しています。（過去24時間・1v1は除外）")
         
-        with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大2000件)"):
+        with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大5000件フル探索中)"):
             custom_battles = generate_custom_battles(guild_id, GUILD_NAME, kuma_members_tuple, time_limit_hours=24)
             
         if not custom_battles:
@@ -764,7 +762,8 @@ if guild_info:
     with tab3:
         st.subheader("⏳ 直近1時間のリアルタイム・レポート")
         with st.spinner("直近1時間分のデータを探索・集計中..."):
-            recent_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=1)
+            # 1時間なら2000件で十分カバー可能
+            recent_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=1, max_events=2000)
             
         if not recent_events:
             st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
