@@ -143,16 +143,55 @@ def calculate_loot_value(victim, price_dict):
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ 全参加者リストと詳細タイムラインを描画する共通関数 ★
-def render_battle_summary(events, market_prices, key_prefix="default"):
+# ★ タイムライン生成専用の関数 (タブ1や詳細レポートで使い回します)
+def generate_timeline_html(events, guild_name):
+    kuma_kill_logs = []
+    kuma_death_logs = []
+    
+    for ev in events:
+        killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
+        k_guild_raw = killer.get("GuildName", "")
+        
+        k_wep = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
+        v_wep = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
+        k_wep_url = f"{RENDER_URL}/{k_wep}.png?size=40" if k_wep else None
+        v_wep_url = f"{RENDER_URL}/{v_wep}.png?size=40" if v_wep else None
+        
+        k_img_html = f"<img src='{k_wep_url}' width='26' style='vertical-align:middle; background-color:#2c2c2c; border-radius:4px;'>" if k_wep else "👊"
+        v_img_html = f"<img src='{v_wep_url}' width='26' style='vertical-align:middle; background-color:#2c2c2c; border-radius:4px;'>" if v_wep else "👊"
+        
+        _, jst_time = convert_time(ev.get("TimeStamp", ""))
+        time_str = jst_time.split(" ")[1] if jst_time != "Unknown" else "??:??"
+        
+        k_ip_val = int(killer.get("AverageItemPower", 0))
+        v_ip_val = int(victim.get("AverageItemPower", 0))
+
+        if k_guild_raw.upper() == guild_name.upper():
+            k_name = killer.get("Name", "Unknown")
+            e_guild_raw, e_alliance_raw = victim.get("GuildName", ""), victim.get("AllianceName", "")
+            e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else (e_guild_raw if e_guild_raw else "無所属")
+            v_disp = f"{victim.get('Name', 'Unknown')} {e_guild_disp}" if e_guild_disp != "無所属" else victim.get('Name', 'Unknown')
+            
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_name}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#3498db; margin: 0 4px;'>▶キル▶</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
+            kuma_kill_logs.append(log_str)
+        else:
+            v_name = victim.get("Name", "Unknown")
+            e_guild_raw, e_alliance_raw = killer.get("GuildName", ""), killer.get("AllianceName", "")
+            e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else (e_guild_raw if e_guild_raw else "無所属")
+            k_disp = f"{killer.get('Name', 'Unknown')} {e_guild_disp}" if e_guild_disp != "無所属" else killer.get('Name', 'Unknown')
+            
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {v_img_html} <b>{v_name}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>◀デス◀</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span></div>"
+            kuma_death_logs.append(log_str)
+            
+    return kuma_kill_logs, kuma_death_logs
+
+# ★ 詳細レポート共通関数 ★
+def render_battle_summary(events, market_prices):
     kuma_kills, kuma_deaths = 0, 0
     gained_fame, lost_fame, gained_silver, lost_silver = 0, 0, 0, 0
     
     kuma_players = {}
     enemy_players = {}
-    
-    kuma_kill_logs = []
-    kuma_death_logs = []
     
     # 参加者全員の情報を集める
     def track_player(p_obj):
@@ -213,32 +252,16 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
     kuma_stats = {}
     enemy_victim_stats = {}
 
-    # キル・デスログの集計とタイムライン生成
     for ev in events:
         killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
         fame = ev.get("TotalVictimKillFame", 0)
         loot_value = calculate_loot_value(victim, market_prices)
-        
         k_guild_raw = killer.get("GuildName", "")
         
-        k_wep = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
-        v_wep = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
-        k_wep_url = f"{RENDER_URL}/{k_wep}.png?size=40" if k_wep else None
-        v_wep_url = f"{RENDER_URL}/{v_wep}.png?size=40" if v_wep else None
-        
-        k_img_html = f"<img src='{k_wep_url}' width='26' style='vertical-align:middle; background-color:#2c2c2c; border-radius:4px;'>" if k_wep else "👊"
-        v_img_html = f"<img src='{v_wep_url}' width='26' style='vertical-align:middle; background-color:#2c2c2c; border-radius:4px;'>" if v_wep else "👊"
-        
-        _, jst_time = convert_time(ev.get("TimeStamp", ""))
-        time_str = jst_time.split(" ")[1] if jst_time != "Unknown" else "??:??"
-        
-        k_ip_val = int(killer.get("AverageItemPower", 0))
-        v_ip_val = int(victim.get("AverageItemPower", 0))
-
         if k_guild_raw.upper() == GUILD_NAME.upper():
-            # KUMAのキル
             kuma_kills += 1; gained_fame += fame; gained_silver += loot_value
             k_name = killer.get("Name", "Unknown")
+            k_wep_url = f"{RENDER_URL}/{killer.get('Equipment', {}).get('MainHand', {}).get('Type')}.png?size=40" if killer.get('Equipment', {}).get('MainHand', {}).get('Type') else None
             
             if k_name not in kuma_stats:
                 kuma_stats[k_name] = {"武器": k_wep_url, "プレイヤー名": k_name, "IP": kuma_players.get(k_name, {}).get("IP", 0), "キル": 0, "デス": 0, "獲得名声": 0}
@@ -257,21 +280,18 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
 
             v_name = victim.get("Name", "Unknown")
             v_disp = f"{v_name} {e_guild_disp}" if e_guild_disp != "無所属" else v_name
+            v_wep_url = f"{RENDER_URL}/{victim.get('Equipment', {}).get('MainHand', {}).get('Type')}.png?size=40" if victim.get('Equipment', {}).get('MainHand', {}).get('Type') else None
             
             if v_disp not in enemy_victim_stats:
                 enemy_victim_stats[v_disp] = {"武器": v_wep_url, "敵プレイヤー名": v_disp, "IP": enemy_players.get(v_name, {}).get("IP", 0), "倒した回数": 0, "奪った名声": 0}
             else:
                 if v_wep_url: enemy_victim_stats[v_disp]["武器"] = v_wep_url
             enemy_victim_stats[v_disp]["倒した回数"] += 1; enemy_victim_stats[v_disp]["奪った名声"] += fame
-            
-            # ★ キルログ作成 (IP表示＆見やすい色)
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_name}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#3498db; margin: 0 4px;'>▶キル▶</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
-            kuma_kill_logs.append(log_str)
                 
         else:
-            # KUMAのデス
             kuma_deaths += 1; lost_fame += fame; lost_silver += loot_value
             v_name = victim.get("Name", "Unknown")
+            v_wep_url = f"{RENDER_URL}/{victim.get('Equipment', {}).get('MainHand', {}).get('Type')}.png?size=40" if victim.get('Equipment', {}).get('MainHand', {}).get('Type') else None
             
             if v_name not in kuma_stats:
                 kuma_stats[v_name] = {"武器": v_wep_url, "プレイヤー名": v_name, "IP": kuma_players.get(v_name, {}).get("IP", 0), "キル": 0, "デス": 0, "獲得名声": 0}
@@ -285,11 +305,6 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
             
             if e_guild_disp in enemy_stats: enemy_stats[e_guild_disp]["やられた数"] += 1
             if e_alliance_disp in enemy_alliance_stats: enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
-                
-            # ★ デスログ作成
-            k_disp = f"{killer.get('Name', 'Unknown')} {e_guild_disp}" if e_guild_disp != "無所属" else killer.get('Name', 'Unknown')
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {v_img_html} <b>{v_name}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>◀デス◀</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span></div>"
-            kuma_death_logs.append(log_str)
 
     # --- 描画処理 ---
     kuma_p_count = len(kuma_players)
@@ -354,7 +369,6 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
         else: st.write("データなし")
             
     st.divider()
-    # ★ 武器円グラフを削除し、参加者一覧を追加 ★
     col_k_part, col_e_part = st.columns(2)
     with col_k_part:
         st.markdown("#### 🐻 参加したKUMAメンバー一覧")
@@ -377,20 +391,21 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
         else: st.write("データなし")
         
     st.divider()
-    # ★ タイムライン ★
+    # タイムライン生成・描画
+    kill_logs, death_logs = generate_timeline_html(events, GUILD_NAME)
     with st.expander("📜 バトル タイムライン (詳細キル/デスログ)", expanded=False):
         col_kl, col_dl = st.columns(2)
         with col_kl:
             st.markdown("**🔥 KUMAのキルログ**")
-            if kuma_kill_logs:
-                st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(kuma_kill_logs) + "</div>", unsafe_allow_html=True)
+            if kill_logs:
+                st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(kill_logs) + "</div>", unsafe_allow_html=True)
             else:
                 st.write("キルログなし")
                 
         with col_dl:
             st.markdown("**💀 KUMAのデスログ**")
-            if kuma_death_logs:
-                st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(kuma_death_logs) + "</div>", unsafe_allow_html=True)
+            if death_logs:
+                st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(death_logs) + "</div>", unsafe_allow_html=True)
             else:
                 st.write("デスログなし")
 
@@ -550,13 +565,13 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    # ★ タブを最適化・再構成
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 総合ステータス＆分析", 
-        "⚔️ 最近のキルボード (超詳細)",
-        "🔍 プレイヤー詳細分析",
-        "🛡️ バトルレポート(公式API)",
+        "🛡️ バトルレポート",
         "⏳ 1時間の戦況レポート",
-        "🛠️ 新バトルシステム(テスト)"
+        "⚔️ 最近のキルボード",
+        "🔍 プレイヤー詳細分析"
     ])
 
     # 【タブ1】総合ステータス ＆ 分析
@@ -574,7 +589,30 @@ if guild_info:
         col2.metric("🔥 総キルフェイム", f"{kill_fame:,}")
         col3.metric("💀 総デスフェイム", f"{death_fame:,}")
         col4.metric("⚖️ ギルド総合 K/D", f"{kd_ratio:.2f}")
+        st.divider()
 
+        # ★ ここに1時間以内のタイムラインを設置 ★
+        st.subheader("📜 1時間以内のバトル タイムライン (詳細キル/デスログ)")
+        with st.spinner("直近1時間のタイムラインを生成中..."):
+            recent_events_tab1 = get_last_hour_events(guild_id)
+            
+        if recent_events_tab1:
+            kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, GUILD_NAME)
+            col_kl1, col_dl1 = st.columns(2)
+            with col_kl1:
+                st.markdown("**🔥 KUMAのキルログ**")
+                if kill_logs_t1:
+                    st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(kill_logs_t1) + "</div>", unsafe_allow_html=True)
+                else:
+                    st.write("直近1時間のキルログはありません")
+            with col_dl1:
+                st.markdown("**💀 KUMAのデスログ**")
+                if death_logs_t1:
+                    st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(death_logs_t1) + "</div>", unsafe_allow_html=True)
+                else:
+                    st.write("直近1時間のデスログはありません")
+        else:
+            st.info("直近1時間以内に発生した戦闘ログはありません。")
         st.divider()
             
         st.subheader("📈 ギルド行動 ＆ メタ分析")
@@ -605,8 +643,70 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード
+    # 【タブ2】🛡️ バトルレポート (独自アルゴリズム版)
     with tab2:
+        st.subheader("🛡️ バトルレポート")
+        st.write("公式APIの更新遅延を回避するため、キルログから「戦闘が5分空いたら別バトル」という独自ロジックで集団戦を自動生成しています。（過去24時間・1v1は除外）")
+        
+        with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大1000件)"):
+            custom_battles = generate_custom_battles(guild_id, time_limit_hours=24)
+            
+        if not custom_battles:
+            st.info("過去24時間に、条件に一致するKUMAの集団戦（3人以上）は見つかりませんでした。")
+        else:
+            with st.spinner("💰 全バトルのロスト品の市場価格を一括解析中..."):
+                all_battle_item_ids = []
+                for b in custom_battles:
+                    for ev in b["events"]:
+                        for item in ev.get("Victim", {}).get("Equipment", {}).values():
+                            if item: all_battle_item_ids.append(item.get("Type"))
+                        for item in ev.get("Victim", {}).get("Inventory", []):
+                            if item: all_battle_item_ids.append(item.get("Type"))
+                battle_market_prices = get_market_prices(all_battle_item_ids)
+
+            for idx, battle_data in enumerate(custom_battles):
+                events = battle_data["events"]
+                players_count = battle_data["players_count"]
+                
+                start_ev = events[0]
+                end_ev = events[-1]
+                _, jst_start = convert_time(start_ev.get("TimeStamp", ""))
+                _, jst_end = convert_time(end_ev.get("TimeStamp", ""))
+                
+                kuma_k, kuma_d = 0, 0
+                for ev in events:
+                    if ev.get("Killer", {}).get("GuildName", "").upper() == GUILD_NAME.upper():
+                        kuma_k += 1
+                    else:
+                        kuma_d += 1
+                
+                header_title = f"⚔️ {jst_start} 〜 {jst_end.split(' ')[1]} ｜ KUMA戦績: {kuma_k}キル / {kuma_d}デス ｜ 参加総数: {players_count}名"
+                
+                with st.expander(header_title, expanded=(idx == 0)):
+                    render_battle_summary(events, battle_market_prices)
+
+    # 【タブ3】⏳ 1時間の戦況レポート
+    with tab3:
+        st.subheader("⏳ 直近1時間のリアルタイム・レポート")
+        with st.spinner("直近1時間分のデータを探索・集計中..."):
+            recent_events = get_last_hour_events(guild_id)
+            
+        if not recent_events:
+            st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
+        else:
+            with st.spinner("💰 1時間分のロスト品の市場価格を解析中..."):
+                all_item_ids_hour = []
+                for ev in recent_events:
+                    for item in ev.get("Victim", {}).get("Equipment", {}).values():
+                        if item: all_item_ids_hour.append(item.get("Type"))
+                    for item in ev.get("Victim", {}).get("Inventory", []):
+                        if item: all_item_ids_hour.append(item.get("Type"))
+                market_prices_hour = get_market_prices(all_item_ids_hour)
+
+            render_battle_summary(recent_events, market_prices_hour)
+
+    # 【タブ4】⚔️ 最近のキルボード
+    with tab4:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
         search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
         display_events = []
@@ -664,8 +764,8 @@ if guild_info:
                 with col_i: st.markdown(f"**🎒 ロストしたアイテム:**<br>{inv_html}" if inv_html else "**🎒 ロストしたアイテム:** 空っぽ", unsafe_allow_html=True)
                 st.write("---")
 
-    # 【タブ3】プレイヤー詳細分析
-    with tab3:
+    # 【タブ5】🔍 プレイヤー詳細分析
+    with tab5:
         st.subheader("🔍 プレイヤー詳細分析")
         search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
         if st.button("検索する", type="primary"):
@@ -683,74 +783,6 @@ if guild_info:
                         c3.metric("⚖️ K/D 比", f"{k_fame / d_fame if d_fame > 0 else 0:.2f}")
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
-
-    # 【タブ4】🛡️ バトルレポート (公式API版)
-    with tab4:
-        st.subheader("🛡️ バトルレポート (公式API版)")
-        st.write("※ 公式システムが「バトル」と認定し、APIを発行した戦闘のみ表示されます。(遅延する場合があります)")
-        st.info("現在はテストとして、右側の「🛠️ 新バトルシステム(テスト)」タブをお試しください！")
-
-    # 【タブ5】⏳ 1時間の戦況レポート
-    with tab5:
-        st.subheader("⏳ 直近1時間のリアルタイム・レポート")
-        with st.spinner("直近1時間分のデータを探索・集計中..."):
-            recent_events = get_last_hour_events(guild_id)
-            
-        if not recent_events:
-            st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
-        else:
-            with st.spinner("💰 1時間分のロスト品の市場価格を解析中..."):
-                all_item_ids_hour = []
-                for ev in recent_events:
-                    for item in ev.get("Victim", {}).get("Equipment", {}).values():
-                        if item: all_item_ids_hour.append(item.get("Type"))
-                    for item in ev.get("Victim", {}).get("Inventory", []):
-                        if item: all_item_ids_hour.append(item.get("Type"))
-                market_prices_hour = get_market_prices(all_item_ids_hour)
-
-            render_battle_summary(recent_events, market_prices_hour, key_prefix="tab5_hour")
-
-    # 【タブ6】🛠️ 新バトルシステム(テスト)
-    with tab6:
-        st.subheader("🛠️ 自作アルゴリズム バトルレポート (テスト版)")
-        st.write("公式APIの更新遅延を回避するため、キルログから「戦闘が5分空いたら別バトル」という独自ロジックで集団戦を自動生成しています。（過去24時間・1v1は除外）")
-        
-        with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大1000件)"):
-            custom_battles = generate_custom_battles(guild_id, time_limit_hours=24)
-            
-        if not custom_battles:
-            st.info("過去24時間に、条件に一致するKUMAの集団戦（3人以上）は見つかりませんでした。")
-        else:
-            with st.spinner("💰 全バトルのロスト品の市場価格を一括解析中..."):
-                all_battle_item_ids = []
-                for b in custom_battles:
-                    for ev in b["events"]:
-                        for item in ev.get("Victim", {}).get("Equipment", {}).values():
-                            if item: all_battle_item_ids.append(item.get("Type"))
-                        for item in ev.get("Victim", {}).get("Inventory", []):
-                            if item: all_battle_item_ids.append(item.get("Type"))
-                battle_market_prices = get_market_prices(all_battle_item_ids)
-
-            for idx, battle_data in enumerate(custom_battles):
-                events = battle_data["events"]
-                players_count = battle_data["players_count"]
-                
-                start_ev = events[0]
-                end_ev = events[-1]
-                _, jst_start = convert_time(start_ev.get("TimeStamp", ""))
-                _, jst_end = convert_time(end_ev.get("TimeStamp", ""))
-                
-                kuma_k, kuma_d = 0, 0
-                for ev in events:
-                    if ev.get("Killer", {}).get("GuildName", "").upper() == GUILD_NAME.upper():
-                        kuma_k += 1
-                    else:
-                        kuma_d += 1
-                
-                header_title = f"⚔️ {jst_start} 〜 {jst_end.split(' ')[1]} ｜ KUMA戦績: {kuma_k}キル / {kuma_d}デス ｜ 参加総数: {players_count}名"
-                
-                with st.expander(header_title, expanded=(idx == 0)):
-                    render_battle_summary(events, battle_market_prices, key_prefix=f"tab6_battle_{idx}")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
