@@ -143,7 +143,6 @@ def get_guild_members(guild_id):
     except: pass
     return []
 
-# ★ 軽量化対応: limitをデフォルト10に変更
 @st.cache_data(ttl=60)
 def get_guild_events(guild_id, offset=0, limit=10):
     try:
@@ -170,8 +169,9 @@ def get_battle_details(battle_id):
     except: pass
     return None
 
+# ★ 条件を緩和: min_players=1（KUMAが1人以上参加していればOK）
 @st.cache_data(ttl=300)
-def get_group_battles(guild_id, guild_name, min_players=3):
+def get_group_battles(guild_id, guild_name, min_players=1):
     url = f"{BASE_URL}/battles?limit=50&offset=0&guildId={guild_id}"
     valid_battles = []
     try:
@@ -219,11 +219,12 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
+    # ★ タブ名を変更
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 総合ステータス＆分析", 
         "⚔️ 最近のキルボード (超詳細)",
         "🔍 プレイヤー詳細分析",
-        "🛡️ 集団戦 バトルレポート"
+        "🛡️ バトルレポート"
     ])
 
     # 【タブ1】総合ステータス ＆ 分析
@@ -305,7 +306,7 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード (★軽量化版★)
+    # 【タブ2】最新のキルボード 
     with tab2:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
         
@@ -313,7 +314,6 @@ if guild_info:
         
         display_events = []
         if search_filter:
-            # ★ 検索結果の最大表示数を 10件 に軽量化
             st.caption("※直近のログから最大10件を抽出して表示します。")
             with st.spinner("検索中..."):
                 all_events = get_analysis_events(guild_id)
@@ -325,7 +325,6 @@ if guild_info:
                 display_events = display_events[:10]
         else:
             selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5], horizontal=True)
-            # ★ 1ページの取得・表示数を 10件 に軽量化
             display_events = get_guild_events(guild_id, offset=(selected_page - 1) * 10, limit=10)
         
         if display_events:
@@ -416,13 +415,13 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】🛡️ 集団戦 バトルレポート
+    # 【タブ4】🛡️ バトルレポート (★全規模対応★)
     with tab4:
-        st.subheader("🛡️ 集団戦 バトルレポート")
-        st.write("※ KUMAが **3名以上** 参加した集団戦を抽出しています。")
+        st.subheader("🛡️ バトルレポート")
+        st.write("※ KUMAが参加したバトルを抽出しています。")
         
         with st.spinner("直近のバトルを探索中... (最大50件のバトルを分析します)"):
-            group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=3)
+            group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=1)
             
         if group_battles:
             group_battles = sorted(group_battles, key=lambda x: x["summary"].get("startTime", ""), reverse=True)
@@ -517,7 +516,7 @@ if guild_info:
                     st.write("詳細データが見つかりませんでした。")
                         
         else:
-            st.info("直近50件のバトル内に、KUMAが3人以上参加している集団戦は見つかりませんでした。(反映待ちの可能性があります)")
+            st.info("直近50件のバトル内に、KUMAが参加しているバトルは見つかりませんでした。(反映待ちの可能性があります)")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
