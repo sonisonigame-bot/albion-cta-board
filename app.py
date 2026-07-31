@@ -560,7 +560,7 @@ if guild_info:
         else:
             kuma_kills, kuma_deaths = 0, 0
             gained_fame, lost_fame = 0, 0
-            enemy_stats, kuma_stats, weapon_stats, enemy_victim_stats = {}, {}, {}, {}
+            enemy_stats, enemy_alliance_stats, kuma_stats, weapon_stats, enemy_victim_stats = {}, {}, {}, {}, {}
             
             for ev in recent_events:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
@@ -588,12 +588,20 @@ if guild_info:
                     enemy_stats[e_guild]["倒した数"] += 1
                     enemy_stats[e_guild]["奪った名声"] += fame
                     
+                    # ★ 敵同盟(アライアンス)の集計
+                    e_alliance = victim.get("AllianceName", "")
+                    e_alliance_disp = f"[{e_alliance}]" if e_alliance else "無所属"
+                    if e_alliance_disp not in enemy_alliance_stats:
+                        enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
+                    enemy_alliance_stats[e_alliance_disp]["倒した数"] += 1
+                    enemy_alliance_stats[e_alliance_disp]["奪った名声"] += fame
+
                     # 武器集計
                     w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
                     if w_type:
                         weapon_stats[w_type] = weapon_stats.get(w_type, 0) + 1
                         
-                    # ★ 追加: 敵個人の集計（カモにされたプレイヤー）
+                    # 敵個人の集計（カモにされたプレイヤー）
                     v_name = victim.get("Name", "Unknown")
                     v_disp = f"{v_name} [{e_guild}]" if e_guild != "無所属" else v_name
                     if v_disp not in enemy_victim_stats:
@@ -618,6 +626,13 @@ if guild_info:
                     if e_guild not in enemy_stats:
                         enemy_stats[e_guild] = {"敵対ギルド名": e_guild, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
                     enemy_stats[e_guild]["やられた数"] += 1
+
+                    # ★ 敵同盟(アライアンス)の集計
+                    e_alliance = killer.get("AllianceName", "")
+                    e_alliance_disp = f"[{e_alliance}]" if e_alliance else "無所属"
+                    if e_alliance_disp not in enemy_alliance_stats:
+                        enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
+                    enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
             
             # --- トップのステータス表示 ---
             st.divider()
@@ -628,9 +643,19 @@ if guild_info:
             c4.metric("📉 奪われた名声 (Fame)", f"{lost_fame:,}")
             st.divider()
             
-            # --- 上段レイアウト: KUMAメンバー vs 敵対ギルド ---
-            col_l, col_r = st.columns(2)
-            with col_l:
+            # --- 上段レイアウト: 敵対勢力（同盟・ギルド） ---
+            col_al, col_gu = st.columns(2)
+            with col_al:
+                st.markdown("#### 🎌 交戦した敵対同盟 (アライアンス)")
+                if enemy_alliance_stats:
+                    df_alliance = pd.DataFrame(list(enemy_alliance_stats.values())).sort_values(by="倒した数", ascending=False)
+                    df_alliance["奪った名声"] = df_alliance["奪った名声"].apply(lambda x: f"{x:,}")
+                    df_alliance.index = range(1, len(df_alliance) + 1)
+                    st.dataframe(df_alliance, use_container_width=True)
+                else:
+                    st.write("交戦データなし")
+
+            with col_gu:
                 st.markdown("#### 🎯 交戦した敵対ギルド")
                 if enemy_stats:
                     df_enemy = pd.DataFrame(list(enemy_stats.values())).sort_values(by="倒した数", ascending=False)
@@ -639,8 +664,12 @@ if guild_info:
                     st.dataframe(df_enemy, use_container_width=True)
                 else:
                     st.write("交戦データなし")
+            
+            st.divider()
 
-            with col_r:
+            # --- 中段レイアウト: KUMAメンバー vs 敵プレイヤー ---
+            col_l, col_r = st.columns(2)
+            with col_l:
                 st.markdown("#### 🏆 活躍したKUMAメンバー")
                 if kuma_stats:
                     df_kuma = pd.DataFrame(list(kuma_stats.values())).sort_values(by="獲得名声", ascending=False)
@@ -649,12 +678,8 @@ if guild_info:
                     st.dataframe(df_kuma, use_container_width=True)
                 else:
                     st.write("活躍データなし")
-            
-            st.divider()
-            
-            # --- 下段レイアウト: 敵プレイヤー個人 vs 武器ランキング ---
-            col_bl, col_br = st.columns(2)
-            with col_bl:
+
+            with col_r:
                 st.markdown("#### 💀 カモにされた敵プレイヤー")
                 if enemy_victim_stats:
                     df_enemy_v = pd.DataFrame(list(enemy_victim_stats.values())).sort_values(by="倒した回数", ascending=False)
@@ -664,17 +689,19 @@ if guild_info:
                 else:
                     st.write("データなし")
                     
-            with col_br:
-                st.markdown("#### ⚔️ この1時間で最もキルを生んだ武器")
-                if weapon_stats:
-                    sorted_w = sorted(weapon_stats.items(), key=lambda x: x[1], reverse=True)[:6]
-                    w_cols = st.columns(3)
-                    for i, (w_type, count) in enumerate(sorted_w):
-                        with w_cols[i % 3]:
-                            img_url = f"{RENDER_URL}/{w_type}.png?size=80"
-                            st.markdown(f"<div style='text-align:center;'><img src='{img_url}' style='background-color: #2c2c2c; border-radius: 8px; border: 1px solid #555;'><br><b>{count} キル</b></div>", unsafe_allow_html=True)
-                else:
-                    st.caption("武器データなし")
+            st.divider()
+
+            # --- 下段レイアウト: 武器ランキング ---
+            st.markdown("#### ⚔️ この1時間で最もキルを生んだ武器")
+            if weapon_stats:
+                sorted_w = sorted(weapon_stats.items(), key=lambda x: x[1], reverse=True)[:6]
+                w_cols = st.columns(6)
+                for i, (w_type, count) in enumerate(sorted_w):
+                    with w_cols[i % 6]:
+                        img_url = f"{RENDER_URL}/{w_type}.png?size=80"
+                        st.markdown(f"<div style='text-align:center;'><img src='{img_url}' style='background-color: #2c2c2c; border-radius: 8px; border: 1px solid #555;'><br><b>{count} キル</b></div>", unsafe_allow_html=True)
+            else:
+                st.caption("武器データなし")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
