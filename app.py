@@ -16,7 +16,6 @@ if password != "sonikuma":
     st.stop()
 
 # --- ⏱️ Albion ライブ時計ウィジェット (HTML/JS) ---
-# 確実にサイドバーに表示されるように「with st.sidebar:」を追加
 with st.sidebar:
     st.divider()
     components.html("""
@@ -62,14 +61,59 @@ def convert_time(time_str):
     except Exception:
         return "Unknown", "Unknown"
 
+# ★ 装備をゲーム内レイアウト順にフル表示する関数に進化
 def render_equipment_html(equipment_dict):
-    html_images = ""
-    for slot, item in equipment_dict.items():
+    slots = ['Bag', 'Head', 'Cape', 'MainHand', 'Armor', 'OffHand', 'Potion', 'Shoes', 'Food', 'Mount']
+    html_images = "<div style='display: flex; flex-wrap: wrap; gap: 4px; max-width: 200px;'>"
+    for slot in slots:
+        item = equipment_dict.get(slot)
         if item:
             item_name = item.get('Type')
+            count = item.get('Count', 1)
             img_url = f"{RENDER_URL}/{item_name}.png?size=60"
-            html_images += f'<img src="{img_url}" width="50" title="{item_name}" style="background-color: #2c2c2c; border-radius: 8px; margin-right: 5px; border: 1px solid #555;">'
+            count_html = f"<div style='position:absolute; bottom:0; right:4px; font-size:12px; font-weight:bold; color:white; text-shadow: 1px 1px 2px black;'>{count}</div>" if count > 1 else ""
+            html_images += f"<div style='position:relative;'><img src='{img_url}' width='45' title='{item_name}' style='background-color: #2c2c2c; border-radius: 5px; border: 1px solid #555;'>{count_html}</div>"
+        else:
+            # 空のスロット
+            html_images += f"<div style='width: 45px; height: 45px; background-color: #1a1a1a; border-radius: 5px; border: 1px solid #333;'></div>"
+    html_images += "</div>"
     return html_images
+
+# ★ バッグの中身（ドロップ品）を表示する関数
+def render_inventory_html(inventory_list):
+    if not inventory_list: return ""
+    html_images = "<div style='display: flex; flex-wrap: wrap; gap: 4px;'>"
+    has_items = False
+    for item in inventory_list:
+        if item:
+            has_items = True
+            item_name = item.get('Type')
+            count = item.get('Count', 1)
+            img_url = f"{RENDER_URL}/{item_name}.png?size=50"
+            count_html = f"<div style='position:absolute; bottom:0; right:4px; font-size:11px; font-weight:bold; color:white; text-shadow: 1px 1px 2px black;'>{count}</div>" if count > 1 else ""
+            html_images += f"<div style='position:relative;'><img src='{img_url}' width='40' title='{item_name}' style='background-color: #2c2c2c; border-radius: 4px; border: 1px solid #555;'>{count_html}</div>"
+    html_images += "</div>"
+    return html_images if has_items else ""
+
+# ★ アシスト（参加者）を表示する関数
+def render_participants(participants_list):
+    if not participants_list or len(participants_list) <= 1:
+        return "⚔️ **Solo Kill** (1対1の戦い)"
+    
+    parts = []
+    for p in participants_list:
+        name = p.get("Name")
+        dmg = int(p.get("DamageDone", 0))
+        heal = int(p.get("SupportHealingDone", 0))
+        
+        info = f"**{name}**"
+        if dmg > 0: info += f" (⚔️{dmg})"
+        if heal > 0: info += f" (💚{heal})"
+        parts.append({"name": name, "dmg": dmg, "heal": heal, "info": info})
+        
+    parts = sorted(parts, key=lambda x: x["dmg"], reverse=True)
+    parts_str = ", ".join([p["info"] for p in parts])
+    return f"👥 **アシスト ({len(participants_list)}名):** {parts_str}"
 
 def categorize_weapon(w_type):
     if not w_type: return "不明"
@@ -180,7 +224,7 @@ if guild_info:
     # --- 4. 画面表示 ---
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 総合ステータス＆分析", 
-        "⚔️ 最近のキルボード",
+        "⚔️ 最近のキルボード (超詳細)",
         "🔍 プレイヤー詳細分析",
         "🛡️ 集団戦 バトルレポート"
     ])
@@ -264,9 +308,9 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード
+    # 【タブ2】最新のキルボード (★超進化版★)
     with tab2:
-        st.subheader("⚔️ 直近の戦闘ログ")
+        st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
         
         search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
         
@@ -290,19 +334,41 @@ if guild_info:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 v_fame = ev.get("TotalVictimKillFame", 0)
-                html_images = render_equipment_html(victim.get("Equipment", {}))
+                
+                # アライアンスのフォーマット
+                k_alliance = f"[{killer.get('AllianceName')}] " if killer.get('AllianceName') else ""
+                v_alliance = f"[{victim.get('AllianceName')}] " if victim.get('AllianceName') else ""
                 
                 k_name, k_guild, k_ip = killer.get("Name", "Unknown"), killer.get("GuildName", ""), int(killer.get("AverageItemPower", 0))
                 v_name, v_guild, v_ip = victim.get("Name", "Unknown"), victim.get("GuildName", ""), int(victim.get("AverageItemPower", 0))
                 
+                k_disp = f"{k_alliance}{k_name} [{k_guild}]" if k_guild else f"{k_alliance}{k_name}"
+                v_disp = f"{v_alliance}{v_name} [{v_guild}]" if v_guild else f"{v_alliance}{v_name}"
+                
                 if k_guild.upper() == GUILD_NAME.upper():
-                    st.success(f"🔥 **キル** : **{k_name}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_name}** [{v_guild}] (IP: {v_ip})")
-                    st.caption(f"🕒 {jst_time} ｜ 🌟 取得名声: {v_fame:,}")
-                    if html_images: st.markdown(f"**🎁 相手の装備:**<br>{html_images}", unsafe_allow_html=True)
+                    st.success(f"🔥 **キル** : **{k_disp}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_disp}** (IP: {v_ip})")
                 else:
-                    st.error(f"💀 **デス** : **{v_name}** (IP: {v_ip}) ⚔️ 倒された相手 ➡ **{k_name}** [{k_guild}] (IP: {k_ip})")
-                    st.caption(f"🕒 {jst_time} ｜ 🌟 相手の取得名声: {v_fame:,}")
-                    if html_images: st.markdown(f"**💥 ロストした装備:**<br>{html_images}", unsafe_allow_html=True)
+                    st.error(f"💀 **デス** : **{v_disp}** (IP: {v_ip}) ⚔️ 倒された相手 ➡ **{k_disp}** (IP: {k_ip})")
+                    
+                st.caption(f"🕒 {jst_time} ｜ 🌟 取得名声: {v_fame:,}")
+                
+                # アシスト表示
+                participants = ev.get("Participants", [])
+                st.markdown(render_participants(participants))
+                
+                # 装備とインベントリ表示
+                eq_html = render_equipment_html(victim.get("Equipment", {}))
+                inv_html = render_inventory_html(victim.get("Inventory", []))
+                
+                col_eq, col_inv = st.columns([1, 2])
+                with col_eq:
+                    st.markdown(f"**👕 相手の装備:**<br>{eq_html}", unsafe_allow_html=True)
+                with col_inv:
+                    if inv_html:
+                        st.markdown(f"**🎒 バッグの中身 (ドロップ):**<br>{inv_html}", unsafe_allow_html=True)
+                    else:
+                        st.markdown("**🎒 バッグの中身:** 空っぽ", unsafe_allow_html=True)
+                        
                 st.write("---")
         else:
             if search_filter:
