@@ -350,12 +350,14 @@ def render_battle_summary(events, market_prices, guild_id, guild_name, kuma_memb
     enemy_avg_ip = int(sum(info["IP"] for info in enemy_players.values()) / enemy_p_count) if enemy_p_count > 0 else 0
 
     st.markdown(f"#### ⚔️ 全体戦果 (KUMA **{kuma_p_count}名** 🆚 敵軍 **{enemy_p_count}名**)")
-    st.caption(f"🛡️ **平均IP:** KUMA `{kuma_avg_ip}` ｜ 敵軍 `{enemy_avg_ip}`")
-    m1, m2, m3, m4 = st.columns(4)
+    # ★ シルバー表示をここに移動
+    st.caption(f"🛡️ **平均IP:** KUMA `{kuma_avg_ip}` ｜ 敵軍 `{enemy_avg_ip}`  |  💰 **推定シルバー (奪/失):** `{gained_silver:,}` / `{lost_silver:,}`")
+    
+    # 4列から3列に変更
+    m1, m2, m3 = st.columns(3)
     m1.metric("🔥 キル / 💀 デス", f"{kuma_kills} / {kuma_deaths}")
     m2.metric("👥 参加人数 (KUMA / 敵)", f"{kuma_p_count} / {enemy_p_count}")
     m3.metric("🌟 名声 (奪 / 失)", f"{gained_fame:,} / {lost_fame:,}")
-    m4.metric("💰 シルバー (奪 / 失)", f"{gained_silver:,} / {lost_silver:,}")
     st.divider()
     
     col_al, col_gu = st.columns(2)
@@ -484,7 +486,6 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
-# ★ 限界突破！探索上限を5000件（100ページ）に拡大した超取得関数 ★
 @st.cache_data(ttl=60)
 def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_events=5000):
     kuma_member_names = set(kuma_members_tuple)
@@ -525,7 +526,6 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
             if p.get("Id") and is_kuma(p, guild_id, guild_name, kuma_member_names):
                 active_kuma_ids.add(p["Id"])
                 
-    # ★ 限界突破！デスログ裏回収の対象を最大150人（ほぼ全参加者）に引き上げ
     active_kuma_ids = list(active_kuma_ids)[:150] 
     
     # ③ APIが隠した純粋な「デスログ」を個人の履歴から並列で強制回収
@@ -538,7 +538,6 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
         return []
 
     if active_kuma_ids:
-        # 10スレッドの高速並列処理で150人分のデスログを一瞬で回収
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = executor.map(fetch_deaths, active_kuma_ids)
             for p_deaths in results:
@@ -560,7 +559,6 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_eve
 
 @st.cache_data(ttl=180)
 def generate_custom_battles(guild_id, guild_name, kuma_members_tuple, time_limit_hours=24):
-    # バトルレポートの探索も5000件フルパワーに拡張
     events = get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=time_limit_hours, max_events=5000)
     if not events: return []
 
@@ -661,7 +659,6 @@ if guild_info:
 
         st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
         with st.spinner("直近6時間のタイムラインを生成中... (※大容量モード作動中)"):
-            # ★ 限界突破: max_eventsを5000に設定して6時間のログを確実に取り切る
             recent_events_tab1 = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=6, max_events=5000)
             
         if recent_events_tab1:
@@ -762,7 +759,6 @@ if guild_info:
     with tab3:
         st.subheader("⏳ 直近1時間のリアルタイム・レポート")
         with st.spinner("直近1時間分のデータを探索・集計中..."):
-            # 1時間なら2000件で十分カバー可能
             recent_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=1, max_events=2000)
             
         if not recent_events:
