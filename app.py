@@ -143,17 +143,22 @@ def calculate_loot_value(victim, price_dict):
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ KUMA所属判定の最強関数 (IDと名前の両方でチェックし取りこぼしを防ぐ) ★
-def is_kuma(p_obj, guild_id, guild_name):
+# ★ 究極のKUMA所属判定関数 ★
+# ギルドID、ギルド名に加え、「ギルドメンバー名簿(kuma_member_names)」とも照合する
+def is_kuma(p_obj, guild_id, guild_name, kuma_member_names):
     if not p_obj: return False
-    # APIエラーで名前がnullでも、GuildIdが一致していればKUMAと判定する！
+    # ① ギルドIDが一致すればOK
     if p_obj.get("GuildId") == guild_id: return True
+    # ② ギルド名が一致すればOK
     gn = p_obj.get("GuildName")
     if gn and str(gn).upper() == guild_name.upper(): return True
+    # ③ APIバグでギルドが空っぽでも、名前がKUMA名簿にあれば確実にKUMAとして扱う！
+    name = p_obj.get("Name")
+    if name and str(name).upper() in kuma_member_names: return True
     return False
 
 # タイムライン生成専用関数
-def generate_timeline_html(events, guild_id, guild_name):
+def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
     kuma_kill_logs = []
     kuma_death_logs = []
     
@@ -169,12 +174,11 @@ def generate_timeline_html(events, guild_id, guild_name):
     for ev in events:
         killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
         
-        # ★ 新しい厳格なキル・デス判定
-        is_k_kuma = is_kuma(killer, guild_id, guild_name)
-        is_v_kuma = is_kuma(victim, guild_id, guild_name)
-        
+        # 修正された確実な判定
+        is_k_kuma = is_kuma(killer, guild_id, guild_name, kuma_member_names)
+        is_v_kuma = is_kuma(victim, guild_id, guild_name, kuma_member_names)
         if not is_k_kuma and not is_v_kuma:
-            is_k_kuma = any(is_kuma(p, guild_id, guild_name) for p in ev.get("Participants", []))
+            is_k_kuma = any(is_kuma(p, guild_id, guild_name, kuma_member_names) for p in ev.get("Participants", []))
             
         k_wep = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
         v_wep = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
@@ -203,7 +207,7 @@ def generate_timeline_html(events, guild_id, guild_name):
     return kuma_kill_logs, kuma_death_logs
 
 # 詳細レポート共通関数
-def render_battle_summary(events, market_prices, guild_id, guild_name):
+def render_battle_summary(events, market_prices, guild_id, guild_name, kuma_member_names):
     kuma_kills, kuma_deaths = 0, 0
     gained_fame, lost_fame, gained_silver, lost_silver = 0, 0, 0, 0
     
@@ -219,8 +223,7 @@ def render_battle_summary(events, market_prices, guild_id, guild_name):
         w_type = p_obj.get("Equipment", {}).get("MainHand", {}).get("Type")
         w_url = f"{RENDER_URL}/{w_type}.png?size=40" if w_type else None
         
-        # ★ 強化された所属判定
-        if is_kuma(p_obj, guild_id, guild_name):
+        if is_kuma(p_obj, guild_id, guild_name, kuma_member_names):
             if name not in kuma_players:
                 kuma_players[name] = {"武器": w_url, "プレイヤー名": name, "IP": ip}
             else:
@@ -273,20 +276,18 @@ def render_battle_summary(events, market_prices, guild_id, guild_name):
         fame = ev.get("TotalVictimKillFame", 0)
         loot_value = calculate_loot_value(victim, market_prices)
         
-        is_k_kuma = is_kuma(killer, guild_id, guild_name)
-        is_v_kuma = is_kuma(victim, guild_id, guild_name)
-        
+        is_k_kuma = is_kuma(killer, guild_id, guild_name, kuma_member_names)
+        is_v_kuma = is_kuma(victim, guild_id, guild_name, kuma_member_names)
         if not is_k_kuma and not is_v_kuma:
-            is_k_kuma = any(is_kuma(p, guild_id, guild_name) for p in ev.get("Participants", []))
+            is_k_kuma = any(is_kuma(p, guild_id, guild_name, kuma_member_names) for p in ev.get("Participants", []))
         
         if is_k_kuma and not is_v_kuma:
             kuma_kills += 1; gained_fame += fame; gained_silver += loot_value
             
-            # KUMAがアシストの場合、実際のKUMAメンバーを探してスコアを加算
-            k_name = killer.get("Name", "Unknown") if is_kuma(killer, guild_id, guild_name) else None
+            k_name = killer.get("Name", "Unknown") if is_kuma(killer, guild_id, guild_name, kuma_member_names) else None
             if not k_name:
                 for p in ev.get("Participants", []):
-                    if is_kuma(p, guild_id, guild_name):
+                    if is_kuma(p, guild_id, guild_name, kuma_member_names):
                         k_name = p.get("Name", "Unknown")
                         break
             
@@ -413,7 +414,7 @@ def render_battle_summary(events, market_prices, guild_id, guild_name):
         else: st.write("データなし")
         
     st.divider()
-    kill_logs, death_logs = generate_timeline_html(events, guild_id, guild_name)
+    kill_logs, death_logs = generate_timeline_html(events, guild_id, guild_name, kuma_member_names)
     with st.expander("📜 バトル タイムライン (詳細キル/デスログ)", expanded=False):
         col_kl, col_dl = st.columns(2)
         with col_kl:
@@ -469,7 +470,6 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
-# ★ 遡り上限を2000件に増加し、古いログでの打ち切りバグを修正
 @st.cache_data(ttl=60)
 def get_recent_events(guild_id, hours=1):
     events = []
@@ -482,17 +482,14 @@ def get_recent_events(guild_id, hours=1):
             if res.status_code == 200:
                 data = res.json()
                 if not data: break
-                
                 old_count = 0
                 for ev in data:
                     ts_str = ev.get("TimeStamp", "")
                     try:
                         ev_time = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
                         if ev_time >= limit_time: events.append(ev)
-                        else: old_count += 1
+                        else: old_count += 1 
                     except: pass
-                
-                # そのページの50件すべてが指定時間より古い場合のみ探索を完全終了する
                 if old_count == len(data): break
             else: break
         except: break
@@ -510,7 +507,6 @@ def generate_custom_battles(guild_id, time_limit_hours=24):
             if res.status_code == 200:
                 data = res.json()
                 if not data: break
-                
                 old_count = 0
                 for ev in data:
                     ts_str = ev.get("TimeStamp", "")
@@ -519,7 +515,6 @@ def generate_custom_battles(guild_id, time_limit_hours=24):
                         if ev_time >= limit_time: events.append(ev)
                         else: old_count += 1
                     except: pass
-                
                 if old_count == len(data): break
             else: break
         except: break
@@ -591,6 +586,12 @@ with st.spinner("Albion公式サーバーからデータを取得中..."):
 if guild_info:
     guild_id = guild_info["Id"]
     
+    # ★ APIのバグ（ギルド名消失）を無効化するため、ギルドメンバー名簿を裏で取得しておく
+    with st.spinner("ギルド名簿を同期中..."):
+        members_data = get_guild_members(guild_id)
+        # 大文字に統一して検索しやすいセットにする
+        kuma_member_names = {str(m["Name"]).upper() for m in members_data} if members_data else set()
+    
     # --- 4. 画面表示 ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 総合ステータス＆分析", 
@@ -603,7 +604,6 @@ if guild_info:
     # 【タブ1】総合ステータス ＆ 分析
     with tab1:
         st.subheader("📊 ギルド総合ステータス")
-        members_data = get_guild_members(guild_id)
         total_members = len(members_data) if members_data else 0
         
         col1, col2, col3, col4 = st.columns(4)
@@ -622,7 +622,7 @@ if guild_info:
             recent_events_tab1 = get_recent_events(guild_id, hours=6)
             
         if recent_events_tab1:
-            kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, guild_id, GUILD_NAME)
+            kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, guild_id, GUILD_NAME, kuma_member_names)
             col_kl1, col_dl1 = st.columns(2)
             with col_kl1:
                 st.markdown("**🔥 KUMAのキルログ**")
@@ -700,11 +700,10 @@ if guild_info:
                 
                 kuma_k, kuma_d = 0, 0
                 for ev in events:
-                    is_k_kuma = is_kuma(ev.get("Killer", {}), guild_id, GUILD_NAME)
-                    is_v_kuma = is_kuma(ev.get("Victim", {}), guild_id, GUILD_NAME)
-                    
+                    is_k_kuma = is_kuma(ev.get("Killer", {}), guild_id, GUILD_NAME, kuma_member_names)
+                    is_v_kuma = is_kuma(ev.get("Victim", {}), guild_id, GUILD_NAME, kuma_member_names)
                     if not is_k_kuma and not is_v_kuma:
-                        is_k_kuma = any(is_kuma(p, guild_id, GUILD_NAME) for p in ev.get("Participants", []))
+                        is_k_kuma = any(is_kuma(p, guild_id, GUILD_NAME, kuma_member_names) for p in ev.get("Participants", []))
                     
                     if is_k_kuma and not is_v_kuma: kuma_k += 1
                     if is_v_kuma: kuma_d += 1
@@ -712,7 +711,7 @@ if guild_info:
                 header_title = f"⚔️ {jst_start} 〜 {jst_end.split(' ')[1]} ｜ KUMA戦績: {kuma_k}キル / {kuma_d}デス ｜ 参加総数: {players_count}名"
                 
                 with st.expander(header_title, expanded=(idx == 0)):
-                    render_battle_summary(events, battle_market_prices, guild_id, GUILD_NAME)
+                    render_battle_summary(events, battle_market_prices, guild_id, GUILD_NAME, kuma_member_names)
 
     # 【タブ3】⏳ 1時間の戦況レポート
     with tab3:
@@ -732,7 +731,7 @@ if guild_info:
                         if item: all_item_ids_hour.append(item.get("Type"))
                 market_prices_hour = get_market_prices(all_item_ids_hour)
 
-            render_battle_summary(recent_events, market_prices_hour, guild_id, GUILD_NAME)
+            render_battle_summary(recent_events, market_prices_hour, guild_id, GUILD_NAME, kuma_member_names)
 
     # 【タブ4】⚔️ 最近のキルボード
     with tab4:
@@ -775,10 +774,10 @@ if guild_info:
                 k_disp = f"{k_alliance}{k_name} [{k_guild}]" if k_guild else f"{k_alliance}{k_name}"
                 v_disp = f"{v_alliance}{v_name} [{v_guild}]" if v_guild else f"{v_alliance}{v_name}"
                 
-                is_kuma_k = is_kuma(killer, guild_id, GUILD_NAME)
-                is_kuma_v = is_kuma(victim, guild_id, GUILD_NAME)
+                is_kuma_k = is_kuma(killer, guild_id, GUILD_NAME, kuma_member_names)
+                is_kuma_v = is_kuma(victim, guild_id, GUILD_NAME, kuma_member_names)
                 if not is_kuma_k and not is_kuma_v:
-                    is_kuma_k = any(is_kuma(p, guild_id, GUILD_NAME) for p in ev.get("Participants", []))
+                    is_kuma_k = any(is_kuma(p, guild_id, GUILD_NAME, kuma_member_names) for p in ev.get("Participants", []))
                 
                 if is_kuma_k and not is_kuma_v:
                     st.success(f"🔥 **キル** : **{k_disp}** (IP: {k_ip}) ⚔️ 倒した相手 ➡ **{v_disp}** (IP: {v_ip})")
