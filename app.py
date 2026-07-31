@@ -143,11 +143,20 @@ def calculate_loot_value(victim, price_dict):
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ タイムライン生成専用の関数 (タブ1や詳細レポートで使い回します)
+# ★ タイムライン生成専用の関数 (ギルド名・同盟名を表示)
 def generate_timeline_html(events, guild_name):
     kuma_kill_logs = []
     kuma_death_logs = []
     
+    def format_player(p):
+        name = p.get("Name", "Unknown")
+        g = p.get("GuildName", "")
+        a = p.get("AllianceName", "")
+        if g:
+            g_str = f"[{a}] {g}" if a else f"{g}"
+            return f"{name} <span style='font-size:0.85em;color:#aaa;'>{g_str}</span>"
+        return name
+
     for ev in events:
         killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
         k_guild_raw = killer.get("GuildName", "")
@@ -165,22 +174,15 @@ def generate_timeline_html(events, guild_name):
         
         k_ip_val = int(killer.get("AverageItemPower", 0))
         v_ip_val = int(victim.get("AverageItemPower", 0))
+        
+        k_disp = format_player(killer)
+        v_disp = format_player(victim)
 
         if k_guild_raw.upper() == guild_name.upper():
-            k_name = killer.get("Name", "Unknown")
-            e_guild_raw, e_alliance_raw = victim.get("GuildName", ""), victim.get("AllianceName", "")
-            e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else (e_guild_raw if e_guild_raw else "無所属")
-            v_disp = f"{victim.get('Name', 'Unknown')} {e_guild_disp}" if e_guild_disp != "無所属" else victim.get('Name', 'Unknown')
-            
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_name}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#3498db; margin: 0 4px;'>▶キル▶</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#3498db; margin: 0 4px;'>▶キル▶</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
             kuma_kill_logs.append(log_str)
         else:
-            v_name = victim.get("Name", "Unknown")
-            e_guild_raw, e_alliance_raw = killer.get("GuildName", ""), killer.get("AllianceName", "")
-            e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else (e_guild_raw if e_guild_raw else "無所属")
-            k_disp = f"{killer.get('Name', 'Unknown')} {e_guild_disp}" if e_guild_disp != "無所属" else killer.get('Name', 'Unknown')
-            
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {v_img_html} <b>{v_name}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>◀デス◀</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span></div>"
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>◀デス◀</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span></div>"
             kuma_death_logs.append(log_str)
             
     return kuma_kill_logs, kuma_death_logs
@@ -391,7 +393,6 @@ def render_battle_summary(events, market_prices):
         else: st.write("データなし")
         
     st.divider()
-    # タイムライン生成・描画
     kill_logs, death_logs = generate_timeline_html(events, GUILD_NAME)
     with st.expander("📜 バトル タイムライン (詳細キル/デスログ)", expanded=False):
         col_kl, col_dl = st.columns(2)
@@ -448,13 +449,14 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
+# ★ 汎用的な時間指定ができる関数に変更しました（最大1000件探索）
 @st.cache_data(ttl=60)
-def get_last_hour_events(guild_id):
+def get_recent_events(guild_id, hours=1):
     events = []
     now = datetime.now(timezone.utc)
-    one_hour_ago = now - timedelta(hours=1)
+    limit_time = now - timedelta(hours=hours)
     
-    for offset in range(0, 500, 50):
+    for offset in range(0, 1000, 50):
         try:
             res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
             if res.status_code == 200:
@@ -465,7 +467,7 @@ def get_last_hour_events(guild_id):
                     ts_str = ev.get("TimeStamp", "")
                     try:
                         ev_time = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                        if ev_time >= one_hour_ago: events.append(ev)
+                        if ev_time >= limit_time: events.append(ev)
                         else: keep_going = False 
                     except: pass
                 if not keep_going: break
@@ -565,10 +567,10 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    # ★ タブを最適化・再構成
+    # ★ タブの順番を最適化
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 総合ステータス＆分析", 
-        "🛡️ バトルレポート",
+        "🛡️ バトルレポート (新システム)",
         "⏳ 1時間の戦況レポート",
         "⚔️ 最近のキルボード",
         "🔍 プレイヤー詳細分析"
@@ -591,10 +593,10 @@ if guild_info:
         col4.metric("⚖️ ギルド総合 K/D", f"{kd_ratio:.2f}")
         st.divider()
 
-        # ★ ここに1時間以内のタイムラインを設置 ★
-        st.subheader("📜 1時間以内のバトル タイムライン (詳細キル/デスログ)")
-        with st.spinner("直近1時間のタイムラインを生成中..."):
-            recent_events_tab1 = get_last_hour_events(guild_id)
+        # ★ トップページに過去6時間のタイムラインを配置
+        st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
+        with st.spinner("直近6時間のタイムラインを生成中..."):
+            recent_events_tab1 = get_recent_events(guild_id, hours=6)
             
         if recent_events_tab1:
             kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, GUILD_NAME)
@@ -604,15 +606,15 @@ if guild_info:
                 if kill_logs_t1:
                     st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(kill_logs_t1) + "</div>", unsafe_allow_html=True)
                 else:
-                    st.write("直近1時間のキルログはありません")
+                    st.write("直近6時間のキルログはありません")
             with col_dl1:
                 st.markdown("**💀 KUMAのデスログ**")
                 if death_logs_t1:
                     st.markdown("<div style='max-height: 400px; overflow-y: auto; padding: 12px; background-color: #1e1e1e; border-radius: 8px;'>" + "".join(death_logs_t1) + "</div>", unsafe_allow_html=True)
                 else:
-                    st.write("直近1時間のデスログはありません")
+                    st.write("直近6時間のデスログはありません")
         else:
-            st.info("直近1時間以内に発生した戦闘ログはありません。")
+            st.info("過去6時間以内に発生した戦闘ログはありません。")
         st.divider()
             
         st.subheader("📈 ギルド行動 ＆ メタ分析")
@@ -643,9 +645,9 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】🛡️ バトルレポート (独自アルゴリズム版)
+    # 【タブ2】🛡️ バトルレポート (新システム)
     with tab2:
-        st.subheader("🛡️ バトルレポート")
+        st.subheader("🛡️ 新バトルレポート")
         st.write("公式APIの更新遅延を回避するため、キルログから「戦闘が5分空いたら別バトル」という独自ロジックで集団戦を自動生成しています。（過去24時間・1v1は除外）")
         
         with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大1000件)"):
@@ -689,7 +691,7 @@ if guild_info:
     with tab3:
         st.subheader("⏳ 直近1時間のリアルタイム・レポート")
         with st.spinner("直近1時間分のデータを探索・集計中..."):
-            recent_events = get_last_hour_events(guild_id)
+            recent_events = get_recent_events(guild_id, hours=1)
             
         if not recent_events:
             st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
