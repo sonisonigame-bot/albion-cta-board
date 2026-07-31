@@ -154,8 +154,8 @@ def calculate_loot_value(victim, price_dict):
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ 追加: 「詳細レポート」を描画する共通関数（タブ5でもタブ6でもこれを使います）
-def render_battle_summary(events, market_prices):
+# ★ 修正: key_prefix を追加して、円グラフ描画時の重複エラーを回避
+def render_battle_summary(events, market_prices, key_prefix="default"):
     kuma_kills, kuma_deaths = 0, 0
     gained_fame, lost_fame, gained_silver, lost_silver = 0, 0, 0, 0
     
@@ -292,7 +292,8 @@ def render_battle_summary(events, market_prices):
                 color_discrete_map={"🛡️ タンク": "#3498db","⚔️ 火力(近接)": "#e74c3c","🏹 火力(遠距離)": "#e67e22","💚 ヒーラー": "#2ecc71","🌀 サポート/デバフ": "#9b59b6","⚪ その他": "#95a5a6"}
             )
             fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), paper_bgcolor="rgba(0,0,0,0)", font_color="white", showlegend=True)
-            st.plotly_chart(fig, use_container_width=True)
+            # ★ 修正: key 引数を追加して、Streamlitエラーを回避
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
         else: st.write("データなし")
 
 @st.cache_data(ttl=300)
@@ -610,8 +611,8 @@ if guild_info:
                         if item: all_item_ids_hour.append(item.get("Type"))
                 market_prices_hour = get_market_prices(all_item_ids_hour)
 
-            # ★ 共通関数を呼び出して描画するだけ！コードがスッキリしました。
-            render_battle_summary(recent_events, market_prices_hour)
+            # ★ タブ5用のユニークな key_prefix を渡す
+            render_battle_summary(recent_events, market_prices_hour, key_prefix="tab5_hour")
 
     # 【タブ6】🛠️ 新バトルシステム(テスト)
     with tab6:
@@ -624,7 +625,6 @@ if guild_info:
         if not custom_battles:
             st.info("過去24時間に、条件に一致するKUMAの集団戦（3人以上）は見つかりませんでした。")
         else:
-            # ページを開いた時に、全バトルのアイテムIDを一括で市場価格APIに投げておく（高速化のため）
             with st.spinner("💰 全バトルのロスト品の市場価格を一括解析中..."):
                 all_battle_item_ids = []
                 for b in custom_battles:
@@ -654,8 +654,8 @@ if guild_info:
                 header_title = f"⚔️ {jst_start} 〜 {jst_end.split(' ')[1]} ｜ KUMA戦績: {kuma_k}キル / {kuma_d}デス ｜ 参加人数: {players_count}名"
                 
                 with st.expander(header_title, expanded=(idx == 0)):
-                    # ★ ここでも共通関数を呼び出すだけで、タブ5と全く同じリッチな画面が表示されます！
-                    render_battle_summary(events, battle_market_prices)
+                    # ★ タブ6用のユニークな key_prefix を渡す (idxを利用)
+                    render_battle_summary(events, battle_market_prices, key_prefix=f"tab6_battle_{idx}")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
