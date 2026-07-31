@@ -566,10 +566,10 @@ if guild_info:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
                 fame = ev.get("TotalVictimKillFame", 0)
                 
-                k_guild = killer.get("GuildName", "").upper()
+                k_guild_raw = killer.get("GuildName", "")
                 
-                if k_guild == GUILD_NAME.upper():
-                    # KUMAのキル
+                if k_guild_raw.upper() == GUILD_NAME.upper():
+                    # --- KUMAのキル ---
                     kuma_kills += 1
                     gained_fame += fame
                     
@@ -580,17 +580,21 @@ if guild_info:
                     kuma_stats[k_name]["キル"] += 1
                     kuma_stats[k_name]["獲得名声"] += fame
                     
-                    # 敵ギルドの集計
-                    e_guild = victim.get("GuildName", "無所属")
-                    if not e_guild: e_guild = "無所属"
-                    if e_guild not in enemy_stats:
-                        enemy_stats[e_guild] = {"敵対ギルド名": e_guild, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
-                    enemy_stats[e_guild]["倒した数"] += 1
-                    enemy_stats[e_guild]["奪った名声"] += fame
+                    # 敵対ギルドの集計（同盟タグ付き）
+                    e_guild_raw = victim.get("GuildName", "")
+                    e_alliance_raw = victim.get("AllianceName", "")
+                    if e_guild_raw:
+                        e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else e_guild_raw
+                    else:
+                        e_guild_disp = "無所属"
+                        
+                    if e_guild_disp not in enemy_stats:
+                        enemy_stats[e_guild_disp] = {"敵対ギルド名": e_guild_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
+                    enemy_stats[e_guild_disp]["倒した数"] += 1
+                    enemy_stats[e_guild_disp]["奪った名声"] += fame
                     
-                    # ★ 敵同盟(アライアンス)の集計
-                    e_alliance = victim.get("AllianceName", "")
-                    e_alliance_disp = f"[{e_alliance}]" if e_alliance else "無所属"
+                    # 敵対同盟の集計
+                    e_alliance_disp = f"[{e_alliance_raw}]" if e_alliance_raw else "無所属"
                     if e_alliance_disp not in enemy_alliance_stats:
                         enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
                     enemy_alliance_stats[e_alliance_disp]["倒した数"] += 1
@@ -603,14 +607,14 @@ if guild_info:
                         
                     # 敵個人の集計（カモにされたプレイヤー）
                     v_name = victim.get("Name", "Unknown")
-                    v_disp = f"{v_name} [{e_guild}]" if e_guild != "無所属" else v_name
+                    v_disp = f"{v_name} {e_guild_disp}" if e_guild_disp != "無所属" else v_name
                     if v_disp not in enemy_victim_stats:
                         enemy_victim_stats[v_disp] = {"敵プレイヤー名": v_disp, "倒した回数": 0, "奪った名声": 0}
                     enemy_victim_stats[v_disp]["倒した回数"] += 1
                     enemy_victim_stats[v_disp]["奪った名声"] += fame
                         
                 else:
-                    # KUMAのデス
+                    # --- KUMAのデス ---
                     kuma_deaths += 1
                     lost_fame += fame
                     
@@ -620,16 +624,20 @@ if guild_info:
                         kuma_stats[v_name] = {"プレイヤー名": v_name, "キル": 0, "デス": 0, "獲得名声": 0}
                     kuma_stats[v_name]["デス"] += 1
                     
-                    # 敵ギルドの集計
-                    e_guild = killer.get("GuildName", "無所属")
-                    if not e_guild: e_guild = "無所属"
-                    if e_guild not in enemy_stats:
-                        enemy_stats[e_guild] = {"敵対ギルド名": e_guild, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
-                    enemy_stats[e_guild]["やられた数"] += 1
+                    # 敵対ギルドの集計（同盟タグ付き）
+                    e_guild_raw = killer.get("GuildName", "")
+                    e_alliance_raw = killer.get("AllianceName", "")
+                    if e_guild_raw:
+                        e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else e_guild_raw
+                    else:
+                        e_guild_disp = "無所属"
+                        
+                    if e_guild_disp not in enemy_stats:
+                        enemy_stats[e_guild_disp] = {"敵対ギルド名": e_guild_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
+                    enemy_stats[e_guild_disp]["やられた数"] += 1
 
-                    # ★ 敵同盟(アライアンス)の集計
-                    e_alliance = killer.get("AllianceName", "")
-                    e_alliance_disp = f"[{e_alliance}]" if e_alliance else "無所属"
+                    # 敵対同盟の集計
+                    e_alliance_disp = f"[{e_alliance_raw}]" if e_alliance_raw else "無所属"
                     if e_alliance_disp not in enemy_alliance_stats:
                         enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
                     enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
