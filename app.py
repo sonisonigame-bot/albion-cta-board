@@ -169,7 +169,6 @@ def get_battle_details(battle_id):
     except: pass
     return None
 
-# ★ 元の 3人以上 (min_players=3) に戻す
 @st.cache_data(ttl=180)
 def get_group_battles(guild_id, guild_name, min_players=3):
     valid_battles = []
@@ -307,7 +306,7 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード 
+    # 【タブ2】最新のキルボード (★キラー装備追加版★)
     with tab2:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
         
@@ -353,17 +352,22 @@ if guild_info:
                 participants = ev.get("Participants", [])
                 st.markdown(render_participants(participants))
                 
-                eq_html = render_equipment_html(victim.get("Equipment", {}))
+                # ★ キラーと犠牲者の装備、インベントリを取得
+                k_eq_html = render_equipment_html(killer.get("Equipment", {}))
+                v_eq_html = render_equipment_html(victim.get("Equipment", {}))
                 inv_html = render_inventory_html(victim.get("Inventory", []))
                 
-                col_eq, col_inv = st.columns([1, 2])
-                with col_eq:
-                    st.markdown(f"**👕 相手の装備:**<br>{eq_html}", unsafe_allow_html=True)
-                with col_inv:
+                # ★ 3カラムレイアウトで並べて表示
+                col_k, col_v, col_i = st.columns([1.2, 1.2, 1.5])
+                with col_k:
+                    st.markdown(f"**🔥 {k_name} の装備:**<br>{k_eq_html}", unsafe_allow_html=True)
+                with col_v:
+                    st.markdown(f"**💀 {v_name} の装備:**<br>{v_eq_html}", unsafe_allow_html=True)
+                with col_i:
                     if inv_html:
-                        st.markdown(f"**🎒 バッグの中身 (ドロップ):**<br>{inv_html}", unsafe_allow_html=True)
+                        st.markdown(f"**🎒 ロストしたアイテム:**<br>{inv_html}", unsafe_allow_html=True)
                     else:
-                        st.markdown("**🎒 バッグの中身:** 空っぽ", unsafe_allow_html=True)
+                        st.markdown("**🎒 ロストしたアイテム:** 空っぽ", unsafe_allow_html=True)
                         
                 st.write("---")
         else:
