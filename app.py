@@ -58,7 +58,17 @@ def convert_time(time_str):
     except Exception:
         return "Unknown", "Unknown"
 
+# ★ 装備やインベントリから安全にデータを取得するための防御関数
+def get_weapon(p_obj):
+    if not p_obj: return None
+    eq = p_obj.get("Equipment")
+    if not eq: return None
+    mh = eq.get("MainHand")
+    if not mh: return None
+    return mh.get("Type")
+
 def render_equipment_html(equipment_dict):
+    if not equipment_dict: equipment_dict = {}
     slots = ['Bag', 'Head', 'Cape', 'MainHand', 'Armor', 'OffHand', 'Potion', 'Shoes', 'Food', 'Mount']
     html_images = "<div style='display: flex; flex-wrap: wrap; gap: 4px; max-width: 200px;'>"
     for slot in slots:
@@ -129,30 +139,31 @@ def get_market_prices(item_ids):
         except: pass
     return prices
 
+# ★ 修正: dict.items() やリストでのエラーを防ぐ安全な構造
 def calculate_loot_value(victim, price_dict):
     total = 0
-    for slot, item in victim.get("Equipment", {}).items():
+    if not victim: return 0
+    
+    eq = victim.get("Equipment") or {}
+    for slot, item in eq.items():
         if item:
             iid = item.get("Type")
             count = item.get("Count", 1)
             total += price_dict.get(iid, 0) * count
-    for item in victim.get("Inventory", []):
+            
+    inv = victim.get("Inventory") or []
+    for item in inv:
         if item:
             iid = item.get("Type")
             count = item.get("Count", 1)
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ 究極のKUMA所属判定関数 ★
-# ギルドID、ギルド名に加え、「ギルドメンバー名簿(kuma_member_names)」とも照合する
 def is_kuma(p_obj, guild_id, guild_name, kuma_member_names):
     if not p_obj: return False
-    # ① ギルドIDが一致すればOK
     if p_obj.get("GuildId") == guild_id: return True
-    # ② ギルド名が一致すればOK
     gn = p_obj.get("GuildName")
     if gn and str(gn).upper() == guild_name.upper(): return True
-    # ③ APIバグでギルドが空っぽでも、名前がKUMA名簿にあれば確実にKUMAとして扱う！
     name = p_obj.get("Name")
     if name and str(name).upper() in kuma_member_names: return True
     return False
@@ -174,14 +185,13 @@ def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
     for ev in events:
         killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
         
-        # 修正された確実な判定
         is_k_kuma = is_kuma(killer, guild_id, guild_name, kuma_member_names)
         is_v_kuma = is_kuma(victim, guild_id, guild_name, kuma_member_names)
         if not is_k_kuma and not is_v_kuma:
             is_k_kuma = any(is_kuma(p, guild_id, guild_name, kuma_member_names) for p in ev.get("Participants", []))
             
-        k_wep = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
-        v_wep = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
+        k_wep = get_weapon(killer)
+        v_wep = get_weapon(victim)
         k_wep_url = f"{RENDER_URL}/{k_wep}.png?size=40" if k_wep else None
         v_wep_url = f"{RENDER_URL}/{v_wep}.png?size=40" if v_wep else None
         
@@ -220,7 +230,7 @@ def render_battle_summary(events, market_prices, guild_id, guild_name, kuma_memb
         guild = p_obj.get("GuildName") or ""
         alliance = p_obj.get("AllianceName") or ""
         ip = int(p_obj.get("AverageItemPower", 0))
-        w_type = p_obj.get("Equipment", {}).get("MainHand", {}).get("Type")
+        w_type = get_weapon(p_obj)
         w_url = f"{RENDER_URL}/{w_type}.png?size=40" if w_type else None
         
         if is_kuma(p_obj, guild_id, guild_name, kuma_member_names):
@@ -586,10 +596,8 @@ with st.spinner("Albion公式サーバーからデータを取得中..."):
 if guild_info:
     guild_id = guild_info["Id"]
     
-    # ★ APIのバグ（ギルド名消失）を無効化するため、ギルドメンバー名簿を裏で取得しておく
     with st.spinner("ギルド名簿を同期中..."):
         members_data = get_guild_members(guild_id)
-        # 大文字に統一して検索しやすいセットにする
         kuma_member_names = {str(m["Name"]).upper() for m in members_data} if members_data else set()
     
     # --- 4. 画面表示 ---
@@ -683,9 +691,11 @@ if guild_info:
                 all_battle_item_ids = []
                 for b in custom_battles:
                     for ev in b["events"]:
-                        for item in ev.get("Victim", {}).get("Equipment", {}).values():
+                        v_eq = ev.get("Victim", {}).get("Equipment") or {}
+                        for item in v_eq.values():
                             if item: all_battle_item_ids.append(item.get("Type"))
-                        for item in ev.get("Victim", {}).get("Inventory", []):
+                        v_inv = ev.get("Victim", {}).get("Inventory") or []
+                        for item in v_inv:
                             if item: all_battle_item_ids.append(item.get("Type"))
                 battle_market_prices = get_market_prices(all_battle_item_ids)
 
@@ -725,9 +735,11 @@ if guild_info:
             with st.spinner("💰 1時間分のロスト品の市場価格を解析中..."):
                 all_item_ids_hour = []
                 for ev in recent_events:
-                    for item in ev.get("Victim", {}).get("Equipment", {}).values():
+                    v_eq = ev.get("Victim", {}).get("Equipment") or {}
+                    for item in v_eq.values():
                         if item: all_item_ids_hour.append(item.get("Type"))
-                    for item in ev.get("Victim", {}).get("Inventory", []):
+                    v_inv = ev.get("Victim", {}).get("Inventory") or []
+                    for item in v_inv:
                         if item: all_item_ids_hour.append(item.get("Type"))
                 market_prices_hour = get_market_prices(all_item_ids_hour)
 
@@ -755,9 +767,11 @@ if guild_info:
             with st.spinner("💰 ロスト品の市場価格を相場APIから取得中..."):
                 all_item_ids = []
                 for ev in display_events:
-                    for item in ev.get("Victim", {}).get("Equipment", {}).values():
+                    v_eq = ev.get("Victim", {}).get("Equipment") or {}
+                    for item in v_eq.values():
                         if item: all_item_ids.append(item.get("Type"))
-                    for item in ev.get("Victim", {}).get("Inventory", []):
+                    v_inv = ev.get("Victim", {}).get("Inventory") or []
+                    for item in v_inv:
                         if item: all_item_ids.append(item.get("Type"))
                 market_prices = get_market_prices(all_item_ids)
 
@@ -789,9 +803,9 @@ if guild_info:
                 st.caption(f"🕒 {jst_time} ｜ 🌟 取得名声: {v_fame:,} ｜ **💰 推定ロスト総額: {total_silver:,} シルバー**")
                 st.markdown(render_participants(ev.get("Participants", [])))
                 
-                k_eq_html = render_equipment_html(killer.get("Equipment", {}))
-                v_eq_html = render_equipment_html(victim.get("Equipment", {}))
-                inv_html = render_inventory_html(victim.get("Inventory", []))
+                k_eq_html = render_equipment_html(killer.get("Equipment"))
+                v_eq_html = render_equipment_html(victim.get("Equipment"))
+                inv_html = render_inventory_html(victim.get("Inventory"))
                 
                 col_k, col_v, col_i = st.columns([1.2, 1.2, 1.5])
                 with col_k: st.markdown(f"**🔥 {k_name} の装備:**<br>{k_eq_html}", unsafe_allow_html=True)
@@ -821,8 +835,8 @@ if guild_info:
                         
                         st.subheader("🔥 直近のキル (最新3件)")
                         for kill in get_player_recent_history(p_id, "kills", 3):
-                            k_eq = render_equipment_html(kill.get("Killer", {}).get("Equipment", {}))
-                            v_eq = render_equipment_html(kill.get("Victim", {}).get("Equipment", {}))
+                            k_eq = render_equipment_html(kill.get("Killer", {}).get("Equipment"))
+                            v_eq = render_equipment_html(kill.get("Victim", {}).get("Equipment"))
                             _, jst_time = convert_time(kill.get("TimeStamp", ""))
                             st.info(f"⚔️ 倒した相手: **{kill.get('Victim', {}).get('Name', 'Unknown')}** ｜ 🕒 **{jst_time}**")
                             col_k, col_v = st.columns(2)
@@ -834,8 +848,8 @@ if guild_info:
                             
                         st.subheader("💀 直近のデス (最新3件)")
                         for death in get_player_recent_history(p_id, "deaths", 3):
-                            k_eq = render_equipment_html(death.get("Killer", {}).get("Equipment", {}))
-                            v_eq = render_equipment_html(death.get("Victim", {}).get("Equipment", {}))
+                            k_eq = render_equipment_html(death.get("Killer", {}).get("Equipment"))
+                            v_eq = render_equipment_html(death.get("Victim", {}).get("Equipment"))
                             _, jst_time = convert_time(death.get("TimeStamp", ""))
                             st.error(f"⚔️ 倒された相手: **{death.get('Killer', {}).get('Name', 'Unknown')}** ｜ 🕒 **{jst_time}**")
                             col_k, col_v = st.columns(2)
