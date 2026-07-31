@@ -165,7 +165,7 @@ def is_kuma(p_obj, guild_id, guild_name, kuma_member_names):
     if name and str(name).upper() in kuma_member_names: return True
     return False
 
-# タイムライン生成専用関数
+# ★ タイムライン生成専用関数 (レイアウト修正＆アシスト表記)
 def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
     kuma_kill_logs = []
     kuma_death_logs = []
@@ -184,8 +184,15 @@ def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
         
         is_k_kuma = is_kuma(killer, guild_id, guild_name, kuma_member_names)
         is_v_kuma = is_kuma(victim, guild_id, guild_name, kuma_member_names)
+        
+        # 参加者にKUMAがいるかどうか
+        kuma_assistant_name = None
         if not is_k_kuma and not is_v_kuma:
-            is_k_kuma = any(is_kuma(p, guild_id, guild_name, kuma_member_names) for p in ev.get("Participants", []))
+            for p in ev.get("Participants", []):
+                if is_kuma(p, guild_id, guild_name, kuma_member_names):
+                    is_k_kuma = True
+                    kuma_assistant_name = p.get("Name")
+                    break
             
         k_wep = get_weapon(killer)
         v_wep = get_weapon(victim)
@@ -205,10 +212,14 @@ def generate_timeline_html(events, guild_id, guild_name, kuma_member_names):
         v_disp = format_player(victim)
 
         if is_k_kuma and not is_v_kuma:
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#3498db; margin: 0 4px;'>▶キル▶</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
+            # キルログ (KUMA側のアシスト表記を追加)
+            assist_tag = f" <span style='color:#2ecc71; font-size:12px;'>(KUMAアシスト: {kuma_assistant_name})</span>" if kuma_assistant_name else ""
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span>{assist_tag} <span style='color:#e74c3c; margin: 0 4px;'>⚔️</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
             kuma_kill_logs.append(log_str)
+            
         elif is_v_kuma:
-            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>◀デス◀</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span></div>"
+            # デスログ (完全に左が敵Killer、右が味方Victimになるように統一)
+            log_str = f"<div style='margin-bottom:6px; color:#ffffff; font-size:15px;'><span style='color:#a0a0a0;font-size:13px;'>[{time_str}]</span> {k_img_html} <b>{k_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{k_ip_val}]</span> <span style='color:#e74c3c; margin: 0 4px;'>⚔️</span> {v_img_html} <b>{v_disp}</b> <span style='font-size:12px;color:#f39c12;'>[IP:{v_ip_val}]</span></div>"
             kuma_death_logs.append(log_str)
             
     return kuma_kill_logs, kuma_death_logs
@@ -290,12 +301,14 @@ def render_battle_summary(events, market_prices, guild_id, guild_name, kuma_memb
         
         if is_k_kuma and not is_v_kuma:
             kuma_kills += 1; gained_fame += fame; gained_silver += loot_value
+            
             k_name = killer.get("Name", "Unknown") if is_kuma(killer, guild_id, guild_name, kuma_member_names) else None
             if not k_name:
                 for p in ev.get("Participants", []):
                     if is_kuma(p, guild_id, guild_name, kuma_member_names):
                         k_name = p.get("Name", "Unknown")
                         break
+            
             if k_name:
                 k_wep_url = kuma_players.get(k_name, {}).get("武器")
                 if k_name not in kuma_stats:
@@ -477,7 +490,8 @@ def get_analysis_events(guild_id):
 
 # ★ 追加: 公式APIが隠す「デスログ」を並列処理で強制的に回収する最強関数 ★
 @st.cache_data(ttl=60)
-def get_recent_events(guild_id, hours=1, max_events=1000):
+def get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=1, max_events=1000):
+    kuma_member_names = set(kuma_members_tuple)
     events = []
     now = datetime.now(timezone.utc)
     limit_time = now - timedelta(hours=hours)
@@ -504,11 +518,14 @@ def get_recent_events(guild_id, hours=1, max_events=1000):
     # ② 戦闘に参加していたKUMAメンバーをリストアップ
     active_kuma_ids = set()
     for ev in events:
-        k_id = ev.get("Killer", {}).get("Id")
-        if k_id and ev.get("Killer", {}).get("GuildId") == guild_id:
-            active_kuma_ids.add(k_id)
+        k = ev.get("Killer", {})
+        if k.get("Id") and is_kuma(k, guild_id, guild_name, kuma_member_names):
+            active_kuma_ids.add(k["Id"])
+        v = ev.get("Victim", {})
+        if v.get("Id") and is_kuma(v, guild_id, guild_name, kuma_member_names):
+            active_kuma_ids.add(v["Id"])
         for p in ev.get("Participants", []):
-            if p.get("Id") and p.get("GuildId") == guild_id:
+            if p.get("Id") and is_kuma(p, guild_id, guild_name, kuma_member_names):
                 active_kuma_ids.add(p["Id"])
                 
     active_kuma_ids = list(active_kuma_ids)[:50] # 負荷対策で上限50人
@@ -543,9 +560,9 @@ def get_recent_events(guild_id, hours=1, max_events=1000):
     return merged
 
 @st.cache_data(ttl=180)
-def generate_custom_battles(guild_id, time_limit_hours=24):
+def generate_custom_battles(guild_id, guild_name, kuma_members_tuple, time_limit_hours=24):
     # 最新の強力な関数（デスログ完全回収版）を使って24時間分のログを引っ張る
-    events = get_recent_events(guild_id, hours=time_limit_hours, max_events=2000)
+    events = get_recent_events(guild_id, guild_name, kuma_members_tuple, hours=time_limit_hours, max_events=2000)
     if not events: return []
 
     # 時系列順（古い順）に並べ替えてバトルを判定
@@ -574,6 +591,7 @@ def generate_custom_battles(guild_id, time_limit_hours=24):
     valid_battles = []
     for b in battles:
         players = set()
+        kuma_member_names = set(kuma_members_tuple)
         for ev in b:
             if ev.get("Killer", {}).get("Name"): players.add(ev["Killer"]["Name"])
             if ev.get("Victim", {}).get("Name"): players.add(ev["Victim"]["Name"])
@@ -617,6 +635,7 @@ if guild_info:
     with st.spinner("ギルド名簿を同期中..."):
         members_data = get_guild_members(guild_id)
         kuma_member_names = {str(m["Name"]).upper() for m in members_data} if members_data else set()
+        kuma_members_tuple = tuple(sorted(kuma_member_names))
     
     # --- 4. 画面表示 ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -645,7 +664,7 @@ if guild_info:
 
         st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
         with st.spinner("直近6時間のタイムラインを生成中..."):
-            recent_events_tab1 = get_recent_events(guild_id, hours=6)
+            recent_events_tab1 = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=6)
             
         if recent_events_tab1:
             kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, guild_id, GUILD_NAME, kuma_member_names)
@@ -700,7 +719,7 @@ if guild_info:
         st.write("公式APIの更新遅延を回避するため、キルログから「戦闘が5分空いたら別バトル」という独自ロジックで集団戦を自動生成しています。（過去24時間・1v1は除外）")
         
         with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大2000件)"):
-            custom_battles = generate_custom_battles(guild_id, time_limit_hours=24)
+            custom_battles = generate_custom_battles(guild_id, GUILD_NAME, kuma_members_tuple, time_limit_hours=24)
             
         if not custom_battles:
             st.info("過去24時間に、条件に一致するKUMAの集団戦（3人以上）は見つかりませんでした。")
@@ -745,7 +764,7 @@ if guild_info:
     with tab3:
         st.subheader("⏳ 直近1時間のリアルタイム・レポート")
         with st.spinner("直近1時間分のデータを探索・集計中..."):
-            recent_events = get_recent_events(guild_id, hours=1)
+            recent_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, hours=1)
             
         if not recent_events:
             st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
