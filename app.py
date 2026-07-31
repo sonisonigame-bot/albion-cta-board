@@ -154,86 +154,151 @@ def calculate_loot_value(victim, price_dict):
             total += price_dict.get(iid, 0) * count
     return total
 
-# ★ 修正: key_prefix を追加して、円グラフ描画時の重複エラーを回避
+# ★ IP・人数解析機能を追加した詳細レポート共通関数 ★
 def render_battle_summary(events, market_prices, key_prefix="default"):
     kuma_kills, kuma_deaths = 0, 0
     gained_fame, lost_fame, gained_silver, lost_silver = 0, 0, 0, 0
     
-    enemy_stats, enemy_alliance_stats, kuma_stats = {}, {}, {}
-    weapon_stats, enemy_victim_stats = {}, {}
+    # 全参加者のユニークなIPと所属を記録
+    kuma_unique = {}
+    enemy_unique = {}
     kuma_player_roles = {}
+    weapon_stats = {}
     
+    # --- 1. 全イベントを巡回してプレイヤーのユニークなデータを抽出 ---
+    def track_player(p_obj):
+        if not p_obj or not p_obj.get("Name"): return
+        name = p_obj["Name"]
+        guild = p_obj.get("GuildName", "")
+        alliance = p_obj.get("AllianceName", "")
+        ip = int(p_obj.get("AverageItemPower", 0))
+        
+        if guild.upper() == GUILD_NAME.upper():
+            kuma_unique[name] = max(kuma_unique.get(name, 0), ip)
+            w_type = p_obj.get("Equipment", {}).get("MainHand", {}).get("Type")
+            if w_type: kuma_player_roles[name] = categorize_weapon(w_type)
+        else:
+            g_disp = f"[{alliance}] {guild}" if alliance else (guild if guild else "無所属")
+            a_disp = f"[{alliance}]" if alliance else "無所属"
+            if name not in enemy_unique:
+                enemy_unique[name] = {"guild_disp": g_disp, "alliance_disp": a_disp, "ip": ip}
+            else:
+                enemy_unique[name]["ip"] = max(enemy_unique[name]["ip"], ip)
+
+    for ev in events:
+        track_player(ev.get("Killer"))
+        track_player(ev.get("Victim"))
+        for p in ev.get("Participants", []):
+            track_player(p)
+            
+    # --- 2. 抽出したユニークプレイヤーからギルド/同盟の「参加人数と平均IP」を算出 ---
+    enemy_stats = {}
+    enemy_alliance_stats = {}
+    for name, info in enemy_unique.items():
+        g_disp = info["guild_disp"]
+        a_disp = info["alliance_disp"]
+        ip = info["ip"]
+        
+        if g_disp not in enemy_stats:
+            enemy_stats[g_disp] = {"敵対ギルド名": g_disp, "参加人数": 0, "平均IP": 0, "倒した数": 0, "やられた数": 0, "奪った名声": 0, "_ip_sum": 0}
+        enemy_stats[g_disp]["参加人数"] += 1
+        enemy_stats[g_disp]["_ip_sum"] += ip
+        
+        if a_disp not in enemy_alliance_stats:
+            enemy_alliance_stats[a_disp] = {"敵対同盟名": a_disp, "参加人数": 0, "平均IP": 0, "倒した数": 0, "やられた数": 0, "奪った名声": 0, "_ip_sum": 0}
+        enemy_alliance_stats[a_disp]["参加人数"] += 1
+        enemy_alliance_stats[a_disp]["_ip_sum"] += ip
+
+    # _ip_sum を使って平均IPを確定
+    for stats in enemy_stats.values():
+        stats["平均IP"] = int(stats["_ip_sum"] / stats["参加人数"])
+        del stats["_ip_sum"]
+    for stats in enemy_alliance_stats.values():
+        stats["平均IP"] = int(stats["_ip_sum"] / stats["参加人数"])
+        del stats["_ip_sum"]
+        
+    kuma_stats = {}
+    enemy_victim_stats = {}
+
+    # --- 3. キル・デス・フェイム・シルバーの集計 ---
     for ev in events:
         killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
         fame = ev.get("TotalVictimKillFame", 0)
         loot_value = calculate_loot_value(victim, market_prices)
         
         k_guild_raw = killer.get("GuildName", "")
-        v_guild_raw = victim.get("GuildName", "")
         
         if k_guild_raw.upper() == GUILD_NAME.upper():
-            k_name = killer.get("Name", "Unknown")
-            w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
-            if w_type: kuma_player_roles[k_name] = categorize_weapon(w_type)
-        if v_guild_raw.upper() == GUILD_NAME.upper():
-            v_name = victim.get("Name", "Unknown")
-            w_type = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
-            if w_type: kuma_player_roles[v_name] = categorize_weapon(w_type)
-        
-        if k_guild_raw.upper() == GUILD_NAME.upper():
+            # KUMAのキル
             kuma_kills += 1; gained_fame += fame; gained_silver += loot_value
             
             k_name = killer.get("Name", "Unknown")
-            if k_name not in kuma_stats: kuma_stats[k_name] = {"プレイヤー名": k_name, "キル": 0, "デス": 0, "獲得名声": 0}
+            if k_name not in kuma_stats:
+                kuma_stats[k_name] = {"プレイヤー名": k_name, "IP": kuma_unique.get(k_name, 0), "キル": 0, "デス": 0, "獲得名声": 0}
             kuma_stats[k_name]["キル"] += 1; kuma_stats[k_name]["獲得名声"] += fame
             
             e_guild_raw, e_alliance_raw = victim.get("GuildName", ""), victim.get("AllianceName", "")
             e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else (e_guild_raw if e_guild_raw else "無所属")
-                
-            if e_guild_disp not in enemy_stats: enemy_stats[e_guild_disp] = {"敵対ギルド名": e_guild_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
-            enemy_stats[e_guild_disp]["倒した数"] += 1; enemy_stats[e_guild_disp]["奪った名声"] += fame
-            
             e_alliance_disp = f"[{e_alliance_raw}]" if e_alliance_raw else "無所属"
-            if e_alliance_disp not in enemy_alliance_stats: enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
-            enemy_alliance_stats[e_alliance_disp]["倒した数"] += 1; enemy_alliance_stats[e_alliance_disp]["奪った名声"] += fame
+            
+            if e_guild_disp in enemy_stats:
+                enemy_stats[e_guild_disp]["倒した数"] += 1
+                enemy_stats[e_guild_disp]["奪った名声"] += fame
+            if e_alliance_disp in enemy_alliance_stats:
+                enemy_alliance_stats[e_alliance_disp]["倒した数"] += 1
+                enemy_alliance_stats[e_alliance_disp]["奪った名声"] += fame
 
             w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
             if w_type: weapon_stats[w_type] = weapon_stats.get(w_type, 0) + 1
                 
             v_name = victim.get("Name", "Unknown")
             v_disp = f"{v_name} {e_guild_disp}" if e_guild_disp != "無所属" else v_name
-            if v_disp not in enemy_victim_stats: enemy_victim_stats[v_disp] = {"敵プレイヤー名": v_disp, "倒した回数": 0, "奪った名声": 0}
-            enemy_victim_stats[v_disp]["倒した回数"] += 1; enemy_victim_stats[v_disp]["奪った名声"] += fame
+            if v_disp not in enemy_victim_stats:
+                enemy_victim_stats[v_disp] = {"敵プレイヤー名": v_disp, "IP": enemy_unique.get(v_name, {}).get("ip", 0), "倒した回数": 0, "奪った名声": 0}
+            enemy_victim_stats[v_disp]["倒した回数"] += 1
+            enemy_victim_stats[v_disp]["奪った名声"] += fame
                 
         else:
+            # KUMAのデス
             kuma_deaths += 1; lost_fame += fame; lost_silver += loot_value
             
             v_name = victim.get("Name", "Unknown")
-            if v_name not in kuma_stats: kuma_stats[v_name] = {"プレイヤー名": v_name, "キル": 0, "デス": 0, "獲得名声": 0}
+            if v_name not in kuma_stats:
+                kuma_stats[v_name] = {"プレイヤー名": v_name, "IP": kuma_unique.get(v_name, 0), "キル": 0, "デス": 0, "獲得名声": 0}
             kuma_stats[v_name]["デス"] += 1
             
             e_guild_raw, e_alliance_raw = killer.get("GuildName", ""), killer.get("AllianceName", "")
             e_guild_disp = f"[{e_alliance_raw}] {e_guild_raw}" if e_alliance_raw else (e_guild_raw if e_guild_raw else "無所属")
-                
-            if e_guild_disp not in enemy_stats: enemy_stats[e_guild_disp] = {"敵対ギルド名": e_guild_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
-            enemy_stats[e_guild_disp]["やられた数"] += 1
-
             e_alliance_disp = f"[{e_alliance_raw}]" if e_alliance_raw else "無所属"
-            if e_alliance_disp not in enemy_alliance_stats: enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
-            enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
-    
-    st.markdown("#### ⚔️ 全体戦果")
-    m1, m2, m3 = st.columns(3)
+            
+            if e_guild_disp in enemy_stats:
+                enemy_stats[e_guild_disp]["やられた数"] += 1
+            if e_alliance_disp in enemy_alliance_stats:
+                enemy_alliance_stats[e_alliance_disp]["やられた数"] += 1
+
+    # --- 4. 数値の仕上げと描画 ---
+    kuma_p_count = len(kuma_unique)
+    enemy_p_count = len(enemy_unique)
+    kuma_avg_ip = int(sum(kuma_unique.values()) / kuma_p_count) if kuma_p_count > 0 else 0
+    enemy_avg_ip = int(sum(info["ip"] for info in enemy_unique.values()) / enemy_p_count) if enemy_p_count > 0 else 0
+
+    st.markdown(f"#### ⚔️ 全体戦果 (KUMA **{kuma_p_count}名** 🆚 敵軍 **{enemy_p_count}名**)")
+    st.caption(f"🛡️ **平均IP:** KUMA `{kuma_avg_ip}` ｜ 敵軍 `{enemy_avg_ip}`")
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("🔥 キル / 💀 デス", f"{kuma_kills} / {kuma_deaths}")
-    m2.metric("🌟 奪った名声 / 📉 ロスト", f"{gained_fame:,} / {lost_fame:,}")
-    m3.metric("💰 奪った推定シルバー / 💸 ロスト", f"{gained_silver:,} / {lost_silver:,}")
+    m2.metric("👥 参加人数 (KUMA / 敵)", f"{kuma_p_count} / {enemy_p_count}")
+    m3.metric("🌟 名声 (奪 / 失)", f"{gained_fame:,} / {lost_fame:,}")
+    m4.metric("💰 シルバー (奪 / 失)", f"{gained_silver:,} / {lost_silver:,}")
     st.divider()
     
     col_al, col_gu = st.columns(2)
     with col_al:
         st.markdown("#### 🎌 交戦した敵対同盟")
         if enemy_alliance_stats:
-            df_alliance = pd.DataFrame(list(enemy_alliance_stats.values())).sort_values(by="倒した数", ascending=False)
+            df_alliance = pd.DataFrame(list(enemy_alliance_stats.values()))
+            # 列の並びを綺麗に
+            df_alliance = df_alliance[['敵対同盟名', '参加人数', '平均IP', '倒した数', 'やられた数', '奪った名声']]
+            df_alliance = df_alliance.sort_values(by="参加人数", ascending=False)
             df_alliance["奪った名声"] = df_alliance["奪った名声"].apply(lambda x: f"{x:,}")
             df_alliance.index = range(1, len(df_alliance) + 1)
             st.dataframe(df_alliance, use_container_width=True)
@@ -242,7 +307,9 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
     with col_gu:
         st.markdown("#### 🎯 交戦した敵対ギルド")
         if enemy_stats:
-            df_enemy = pd.DataFrame(list(enemy_stats.values())).sort_values(by="倒した数", ascending=False)
+            df_enemy = pd.DataFrame(list(enemy_stats.values()))
+            df_enemy = df_enemy[['敵対ギルド名', '参加人数', '平均IP', '倒した数', 'やられた数', '奪った名声']]
+            df_enemy = df_enemy.sort_values(by="参加人数", ascending=False)
             df_enemy["奪った名声"] = df_enemy["奪った名声"].apply(lambda x: f"{x:,}")
             df_enemy.index = range(1, len(df_enemy) + 1)
             st.dataframe(df_enemy, use_container_width=True)
@@ -253,7 +320,9 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
     with col_l:
         st.markdown("#### 🏆 活躍したKUMAメンバー")
         if kuma_stats:
-            df_kuma = pd.DataFrame(list(kuma_stats.values())).sort_values(by="獲得名声", ascending=False)
+            df_kuma = pd.DataFrame(list(kuma_stats.values()))
+            df_kuma = df_kuma[['プレイヤー名', 'IP', 'キル', 'デス', '獲得名声']]
+            df_kuma = df_kuma.sort_values(by="獲得名声", ascending=False)
             df_kuma["獲得名声"] = df_kuma["獲得名声"].apply(lambda x: f"{x:,}")
             df_kuma.index = range(1, len(df_kuma) + 1)
             st.dataframe(df_kuma, use_container_width=True)
@@ -262,7 +331,9 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
     with col_r:
         st.markdown("#### 💀 カモにされた敵プレイヤー")
         if enemy_victim_stats:
-            df_enemy_v = pd.DataFrame(list(enemy_victim_stats.values())).sort_values(by="倒した回数", ascending=False)
+            df_enemy_v = pd.DataFrame(list(enemy_victim_stats.values()))
+            df_enemy_v = df_enemy_v[['敵プレイヤー名', 'IP', '倒した回数', '奪った名声']]
+            df_enemy_v = df_enemy_v.sort_values(by="倒した回数", ascending=False)
             df_enemy_v["奪った名声"] = df_enemy_v["奪った名声"].apply(lambda x: f"{x:,}")
             df_enemy_v.index = range(1, len(df_enemy_v) + 1)
             st.dataframe(df_enemy_v, use_container_width=True)
@@ -292,7 +363,6 @@ def render_battle_summary(events, market_prices, key_prefix="default"):
                 color_discrete_map={"🛡️ タンク": "#3498db","⚔️ 火力(近接)": "#e74c3c","🏹 火力(遠距離)": "#e67e22","💚 ヒーラー": "#2ecc71","🌀 サポート/デバフ": "#9b59b6","⚪ その他": "#95a5a6"}
             )
             fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), paper_bgcolor="rgba(0,0,0,0)", font_color="white", showlegend=True)
-            # ★ 修正: key 引数を追加して、Streamlitエラーを回避
             st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_pie")
         else: st.write("データなし")
 
@@ -611,7 +681,6 @@ if guild_info:
                         if item: all_item_ids_hour.append(item.get("Type"))
                 market_prices_hour = get_market_prices(all_item_ids_hour)
 
-            # ★ タブ5用のユニークな key_prefix を渡す
             render_battle_summary(recent_events, market_prices_hour, key_prefix="tab5_hour")
 
     # 【タブ6】🛠️ 新バトルシステム(テスト)
@@ -651,10 +720,9 @@ if guild_info:
                     else:
                         kuma_d += 1
                 
-                header_title = f"⚔️ {jst_start} 〜 {jst_end.split(' ')[1]} ｜ KUMA戦績: {kuma_k}キル / {kuma_d}デス ｜ 参加人数: {players_count}名"
+                header_title = f"⚔️ {jst_start} 〜 {jst_end.split(' ')[1]} ｜ KUMA戦績: {kuma_k}キル / {kuma_d}デス ｜ 参加総数: {players_count}名"
                 
                 with st.expander(header_title, expanded=(idx == 0)):
-                    # ★ タブ6用のユニークな key_prefix を渡す (idxを利用)
                     render_battle_summary(events, battle_market_prices, key_prefix=f"tab6_battle_{idx}")
 
 else:
