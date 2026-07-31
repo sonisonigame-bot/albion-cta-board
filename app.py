@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+import plotly.express as px  # ★ 円グラフを描画するためのライブラリを追加
 
 # 画面設定
 st.set_page_config(page_title="🐻KUMA Albion Dashboard", layout="wide")
@@ -108,7 +109,7 @@ def render_participants(participants_list):
     return f"👥 **アシスト ({len(participants_list)}名):** {parts_str}"
 
 def categorize_weapon(w_type):
-    if not w_type: return "不明"
+    if not w_type: return "⚪ その他"
     w = str(w_type).upper()
     if any(x in w for x in ['_MACE', '_HAMMER', '_SHIELD']): return "🛡️ タンク"
     if any(x in w for x in ['_HOLYSTAFF', '_NATURESTAFF']): return "💚 ヒーラー"
@@ -560,27 +561,41 @@ if guild_info:
         else:
             kuma_kills, kuma_deaths = 0, 0
             gained_fame, lost_fame = 0, 0
-            enemy_stats, enemy_alliance_stats, kuma_stats, weapon_stats, enemy_victim_stats = {}, {}, {}, {}, {}
+            enemy_stats, enemy_alliance_stats, kuma_stats = {}, {}, {}
+            weapon_stats, enemy_victim_stats = {}, {}
+            
+            # ★ KUMAメンバーの役割（ロール）集計用辞書
+            kuma_player_roles = {}
             
             for ev in recent_events:
                 killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
                 fame = ev.get("TotalVictimKillFame", 0)
                 
                 k_guild_raw = killer.get("GuildName", "")
+                v_guild_raw = victim.get("GuildName", "")
                 
+                # --- ロール取得用ロジック ---
                 if k_guild_raw.upper() == GUILD_NAME.upper():
-                    # --- KUMAのキル ---
+                    k_name = killer.get("Name", "Unknown")
+                    w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
+                    if w_type: kuma_player_roles[k_name] = categorize_weapon(w_type)
+                
+                if v_guild_raw.upper() == GUILD_NAME.upper():
+                    v_name = victim.get("Name", "Unknown")
+                    w_type = victim.get("Equipment", {}).get("MainHand", {}).get("Type")
+                    if w_type: kuma_player_roles[v_name] = categorize_weapon(w_type)
+                
+                # --- キルログの集計 ---
+                if k_guild_raw.upper() == GUILD_NAME.upper():
                     kuma_kills += 1
                     gained_fame += fame
                     
-                    # 個人の集計
                     k_name = killer.get("Name", "Unknown")
                     if k_name not in kuma_stats:
                         kuma_stats[k_name] = {"プレイヤー名": k_name, "キル": 0, "デス": 0, "獲得名声": 0}
                     kuma_stats[k_name]["キル"] += 1
                     kuma_stats[k_name]["獲得名声"] += fame
                     
-                    # 敵対ギルドの集計（同盟タグ付き）
                     e_guild_raw = victim.get("GuildName", "")
                     e_alliance_raw = victim.get("AllianceName", "")
                     if e_guild_raw:
@@ -593,19 +608,16 @@ if guild_info:
                     enemy_stats[e_guild_disp]["倒した数"] += 1
                     enemy_stats[e_guild_disp]["奪った名声"] += fame
                     
-                    # 敵対同盟の集計
                     e_alliance_disp = f"[{e_alliance_raw}]" if e_alliance_raw else "無所属"
                     if e_alliance_disp not in enemy_alliance_stats:
                         enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
                     enemy_alliance_stats[e_alliance_disp]["倒した数"] += 1
                     enemy_alliance_stats[e_alliance_disp]["奪った名声"] += fame
 
-                    # 武器集計
                     w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
                     if w_type:
                         weapon_stats[w_type] = weapon_stats.get(w_type, 0) + 1
                         
-                    # 敵個人の集計（カモにされたプレイヤー）
                     v_name = victim.get("Name", "Unknown")
                     v_disp = f"{v_name} {e_guild_disp}" if e_guild_disp != "無所属" else v_name
                     if v_disp not in enemy_victim_stats:
@@ -614,17 +626,15 @@ if guild_info:
                     enemy_victim_stats[v_disp]["奪った名声"] += fame
                         
                 else:
-                    # --- KUMAのデス ---
+                    # --- デスログの集計 ---
                     kuma_deaths += 1
                     lost_fame += fame
                     
-                    # 個人の集計
                     v_name = victim.get("Name", "Unknown")
                     if v_name not in kuma_stats:
                         kuma_stats[v_name] = {"プレイヤー名": v_name, "キル": 0, "デス": 0, "獲得名声": 0}
                     kuma_stats[v_name]["デス"] += 1
                     
-                    # 敵対ギルドの集計（同盟タグ付き）
                     e_guild_raw = killer.get("GuildName", "")
                     e_alliance_raw = killer.get("AllianceName", "")
                     if e_guild_raw:
@@ -636,7 +646,6 @@ if guild_info:
                         enemy_stats[e_guild_disp] = {"敵対ギルド名": e_guild_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
                     enemy_stats[e_guild_disp]["やられた数"] += 1
 
-                    # 敵対同盟の集計
                     e_alliance_disp = f"[{e_alliance_raw}]" if e_alliance_raw else "無所属"
                     if e_alliance_disp not in enemy_alliance_stats:
                         enemy_alliance_stats[e_alliance_disp] = {"敵対同盟名": e_alliance_disp, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
@@ -697,19 +706,56 @@ if guild_info:
                 else:
                     st.write("データなし")
                     
+            # --- 下段レイアウト: 武器ランキング ＆ ロール円グラフ ---
             st.divider()
-
-            # --- 下段レイアウト: 武器ランキング ---
-            st.markdown("#### ⚔️ この1時間で最もキルを生んだ武器")
-            if weapon_stats:
-                sorted_w = sorted(weapon_stats.items(), key=lambda x: x[1], reverse=True)[:6]
-                w_cols = st.columns(6)
-                for i, (w_type, count) in enumerate(sorted_w):
-                    with w_cols[i % 6]:
-                        img_url = f"{RENDER_URL}/{w_type}.png?size=80"
-                        st.markdown(f"<div style='text-align:center;'><img src='{img_url}' style='background-color: #2c2c2c; border-radius: 8px; border: 1px solid #555;'><br><b>{count} キル</b></div>", unsafe_allow_html=True)
-            else:
-                st.caption("武器データなし")
+            col_w, col_p = st.columns([6, 4])
+            
+            with col_w:
+                st.markdown("#### ⚔️ この1時間で最もキルを生んだ武器")
+                if weapon_stats:
+                    sorted_w = sorted(weapon_stats.items(), key=lambda x: x[1], reverse=True)[:6]
+                    w_cols = st.columns(3)
+                    for i, (w_type, count) in enumerate(sorted_w):
+                        with w_cols[i % 3]:
+                            img_url = f"{RENDER_URL}/{w_type}.png?size=80"
+                            st.markdown(f"<div style='text-align:center;'><img src='{img_url}' style='background-color: #2c2c2c; border-radius: 8px; border: 1px solid #555;'><br><b>{count} キル</b></div>", unsafe_allow_html=True)
+                else:
+                    st.caption("武器データなし")
+                    
+            # ★ ここから新機能: ロール円グラフ描画 ★
+            with col_p:
+                st.markdown("#### 📊 KUMAメンバーの構成 (ロール)")
+                if kuma_player_roles:
+                    role_counts = {}
+                    for r in kuma_player_roles.values():
+                        role_counts[r] = role_counts.get(r, 0) + 1
+                        
+                    df_roles = pd.DataFrame(list(role_counts.items()), columns=["ロール", "人数"])
+                    # Plotlyを使って美しいドーナツグラフを作成
+                    fig = px.pie(
+                        df_roles, 
+                        values="人数", 
+                        names="ロール", 
+                        hole=0.4, 
+                        color="ロール",
+                        color_discrete_map={
+                            "🛡️ タンク": "#3498db",
+                            "⚔️ 火力(近接)": "#e74c3c",
+                            "🏹 火力(遠距離)": "#e67e22",
+                            "💚 ヒーラー": "#2ecc71",
+                            "🌀 サポート/デバフ": "#9b59b6",
+                            "⚪ その他": "#95a5a6"
+                        }
+                    )
+                    fig.update_layout(
+                        margin=dict(t=20, b=20, l=0, r=0), 
+                        paper_bgcolor="rgba(0,0,0,0)", 
+                        font_color="white", 
+                        showlegend=True
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.write("データなし")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
