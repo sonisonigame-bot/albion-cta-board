@@ -27,12 +27,8 @@ with st.sidebar:
     <script>
         function updateTime() {
             const now = new Date();
-            
-            // UTC時間の計算
             const utc = now.toISOString().substring(11, 19);
             document.getElementById("utc-time").innerText = "UTC " + utc;
-
-            // 日本時間(JST)の計算
             const jstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
             const jst = jstTime.toISOString().substring(11, 19);
             document.getElementById("jst-time").innerText = "JST " + jst;
@@ -161,6 +157,38 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
+# ★ 追加: 直近1時間のイベントだけをかき集める専用関数
+@st.cache_data(ttl=60)
+def get_last_hour_events(guild_id):
+    events = []
+    now = datetime.now(timezone.utc)
+    one_hour_ago = now - timedelta(hours=1)
+    
+    # 1時間のログを拾いきるために最大500件まで探索
+    for offset in range(0, 500, 50):
+        try:
+            res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if not data: break
+                
+                keep_going = True
+                for ev in data:
+                    ts_str = ev.get("TimeStamp", "")
+                    try:
+                        ev_time = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                        if ev_time >= one_hour_ago:
+                            events.append(ev)
+                        else:
+                            keep_going = False # 1時間より古いデータに到達したらストップ
+                    except: pass
+                
+                if not keep_going: break
+            else:
+                break
+        except: break
+    return events
+
 @st.cache_data(ttl=300)
 def get_battle_details(battle_id):
     try:
@@ -220,11 +248,13 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # ★ タブ5を追加
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 総合ステータス＆分析", 
         "⚔️ 最近のキルボード (超詳細)",
         "🔍 プレイヤー詳細分析",
-        "🛡️ バトルレポート"
+        "🛡️ バトルレポート",
+        "⏳ 1時間の戦況レポート"
     ])
 
     # 【タブ1】総合ステータス ＆ 分析
@@ -306,10 +336,9 @@ if guild_info:
             df.index = range(1, len(df) + 1)
             st.dataframe(df, use_container_width=True, height=600)
 
-    # 【タブ2】最新のキルボード (★キラー装備追加版★)
+    # 【タブ2】最新のキルボード
     with tab2:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
-        
         search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
         
         display_events = []
@@ -352,12 +381,10 @@ if guild_info:
                 participants = ev.get("Participants", [])
                 st.markdown(render_participants(participants))
                 
-                # ★ キラーと犠牲者の装備、インベントリを取得
                 k_eq_html = render_equipment_html(killer.get("Equipment", {}))
                 v_eq_html = render_equipment_html(victim.get("Equipment", {}))
                 inv_html = render_inventory_html(victim.get("Inventory", []))
                 
-                # ★ 3カラムレイアウトで並べて表示
                 col_k, col_v, col_i = st.columns([1.2, 1.2, 1.5])
                 with col_k:
                     st.markdown(f"**🔥 {k_name} の装備:**<br>{k_eq_html}", unsafe_allow_html=True)
@@ -522,6 +549,116 @@ if guild_info:
                         
         else:
             st.info("直近100件のバトル内に、KUMAが3人以上参加している判定済みバトルは見つかりませんでした。(公式APIの更新遅延の可能性があります)")
+
+    # 【タブ5】⏳ 1時間の戦況レポート (★新機能★)
+    with tab5:
+        st.subheader("⏳ 直近1時間のリアルタイム・レポート")
+        st.write("現在時刻から過去60分間に発生したキル/デスログを自動でかき集め、リアルタイムの戦況を丸裸にします！")
+        
+        with st.spinner("直近1時間分のデータを探索・集計中..."):
+            recent_events = get_last_hour_events(guild_id)
+            
+        if not recent_events:
+            st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
+        else:
+            kuma_kills, kuma_deaths = 0, 0
+            gained_fame, lost_fame = 0, 0
+            enemy_stats, kuma_stats, weapon_stats = {}, {}, {}
+            
+            for ev in recent_events:
+                killer, victim = ev.get("Killer", {}), ev.get("Victim", {})
+                fame = ev.get("TotalVictimKillFame", 0)
+                
+                k_guild = killer.get("GuildName", "").upper()
+                
+                if k_guild == GUILD_NAME.upper():
+                    # KUMAのキル
+                    kuma_kills += 1
+                    gained_fame += fame
+                    
+                    # 個人の集計
+                    k_name = killer.get("Name", "Unknown")
+                    if k_name not in kuma_stats:
+                        kuma_stats[k_name] = {"プレイヤー名": k_name, "キル": 0, "デス": 0, "獲得名声": 0}
+                    kuma_stats[k_name]["キル"] += 1
+                    kuma_stats[k_name]["獲得名声"] += fame
+                    
+                    # 敵ギルドの集計
+                    e_guild = victim.get("GuildName", "無所属")
+                    if not e_guild: e_guild = "無所属"
+                    if e_guild not in enemy_stats:
+                        enemy_stats[e_guild] = {"敵対ギルド名": e_guild, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
+                    enemy_stats[e_guild]["倒した数"] += 1
+                    enemy_stats[e_guild]["奪った名声"] += fame
+                    
+                    # 武器集計
+                    w_type = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
+                    if w_type:
+                        weapon_stats[w_type] = weapon_stats.get(w_type, 0) + 1
+                        
+                else:
+                    # KUMAのデス
+                    kuma_deaths += 1
+                    lost_fame += fame
+                    
+                    # 個人の集計
+                    v_name = victim.get("Name", "Unknown")
+                    if v_name not in kuma_stats:
+                        kuma_stats[v_name] = {"プレイヤー名": v_name, "キル": 0, "デス": 0, "獲得名声": 0}
+                    kuma_stats[v_name]["デス"] += 1
+                    
+                    # 敵ギルドの集計
+                    e_guild = killer.get("GuildName", "無所属")
+                    if not e_guild: e_guild = "無所属"
+                    if e_guild not in enemy_stats:
+                        enemy_stats[e_guild] = {"敵対ギルド名": e_guild, "倒した数": 0, "やられた数": 0, "奪った名声": 0}
+                    enemy_stats[e_guild]["やられた数"] += 1
+            
+            # --- トップのステータス表示 ---
+            st.divider()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("🔥 1時間の合計キル", f"{kuma_kills} キル")
+            c2.metric("💀 1時間の合計デス", f"{kuma_deaths} デス")
+            c3.metric("🌟 奪った名声 (Fame)", f"{gained_fame:,}")
+            c4.metric("📉 奪われた名声 (Fame)", f"{lost_fame:,}")
+            st.divider()
+            
+            col_l, col_r = st.columns(2)
+            
+            # --- 敵対ギルドの戦績 ---
+            with col_l:
+                st.markdown("#### 🎯 交戦した敵対ギルド")
+                if enemy_stats:
+                    df_enemy = pd.DataFrame(list(enemy_stats.values())).sort_values(by="倒した数", ascending=False)
+                    # カンマ区切りフォーマット
+                    df_enemy["奪った名声"] = df_enemy["奪った名声"].apply(lambda x: f"{x:,}")
+                    df_enemy.index = range(1, len(df_enemy) + 1)
+                    st.dataframe(df_enemy, use_container_width=True)
+                else:
+                    st.write("交戦データなし")
+
+            # --- KUMAメンバーの戦績 ---
+            with col_r:
+                st.markdown("#### 🏆 活躍したKUMAメンバー")
+                if kuma_stats:
+                    df_kuma = pd.DataFrame(list(kuma_stats.values())).sort_values(by="獲得名声", ascending=False)
+                    df_kuma["獲得名声"] = df_kuma["獲得名声"].apply(lambda x: f"{x:,}")
+                    df_kuma.index = range(1, len(df_kuma) + 1)
+                    st.dataframe(df_kuma, use_container_width=True)
+                else:
+                    st.write("活躍データなし")
+                    
+            # --- 活躍した武器トップ ---
+            st.markdown("#### ⚔️ この1時間で最もキルを生んだ武器")
+            if weapon_stats:
+                sorted_w = sorted(weapon_stats.items(), key=lambda x: x[1], reverse=True)[:6]
+                w_cols = st.columns(6)
+                for i, (w_type, count) in enumerate(sorted_w):
+                    with w_cols[i]:
+                        img_url = f"{RENDER_URL}/{w_type}.png?size=80"
+                        st.markdown(f"<div style='text-align:center;'><img src='{img_url}' style='background-color: #2c2c2c; border-radius: 8px; border: 1px solid #555;'><br><b>{count} キル</b></div>", unsafe_allow_html=True)
+            else:
+                st.caption("武器データなし")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
