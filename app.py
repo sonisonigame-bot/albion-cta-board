@@ -169,23 +169,25 @@ def get_battle_details(battle_id):
     except: pass
     return None
 
-# ★ 条件を緩和: min_players=1（KUMAが1人以上参加していればOK）
-@st.cache_data(ttl=300)
+# ★ 修正: 最大100件まで探索を拡大
+@st.cache_data(ttl=180)
 def get_group_battles(guild_id, guild_name, min_players=1):
-    url = f"{BASE_URL}/battles?limit=50&offset=0&guildId={guild_id}"
     valid_battles = []
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            for b in res.json():
-                b_id = b.get("id")
-                b_detail = get_battle_details(b_id)
-                if b_detail:
-                    players = b_detail.get("players", {}).values()
-                    kuma_count = sum(1 for p in players if p.get("guildName", "").upper() == guild_name.upper())
-                    if kuma_count >= min_players:
-                        valid_battles.append({"summary": b, "detail": b_detail, "kuma_count": kuma_count})
-    except: pass
+    for offset in [0, 50]:
+        url = f"{BASE_URL}/battles?limit=50&offset={offset}&guildId={guild_id}"
+        try:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                for b in res.json():
+                    b_id = b.get("id")
+                    b_detail = get_battle_details(b_id)
+                    if b_detail:
+                        players = b_detail.get("players", {}).values()
+                        kuma_count = sum(1 for p in players if p.get("guildName", "").upper() == guild_name.upper())
+                        if kuma_count >= min_players:
+                            if not any(x["summary"]["id"] == b_id for x in valid_battles):
+                                valid_battles.append({"summary": b, "detail": b_detail, "kuma_count": kuma_count})
+        except: pass
     return valid_battles
 
 @st.cache_data(ttl=300)
@@ -219,7 +221,6 @@ if guild_info:
     guild_id = guild_info["Id"]
     
     # --- 4. 画面表示 ---
-    # ★ タブ名を変更
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 総合ステータス＆分析", 
         "⚔️ 最近のキルボード (超詳細)",
@@ -415,12 +416,12 @@ if guild_info:
                     else:
                         st.error("プレイヤーが見つかりませんでした。")
 
-    # 【タブ4】🛡️ バトルレポート (★全規模対応★)
+    # 【タブ4】🛡️ バトルレポート
     with tab4:
         st.subheader("🛡️ バトルレポート")
-        st.write("※ KUMAが参加したバトルを抽出しています。")
+        st.write("※ KUMAが参加したバトルを抽出しています。(公式APIがバトル判定した戦闘のみ表示されます)")
         
-        with st.spinner("直近のバトルを探索中... (最大50件のバトルを分析します)"):
+        with st.spinner("直近のバトルを探索中... (最大100件のバトルを分析します)"):
             group_battles = get_group_battles(guild_id, GUILD_NAME, min_players=1)
             
         if group_battles:
@@ -516,7 +517,7 @@ if guild_info:
                     st.write("詳細データが見つかりませんでした。")
                         
         else:
-            st.info("直近50件のバトル内に、KUMAが参加しているバトルは見つかりませんでした。(反映待ちの可能性があります)")
+            st.info("直近100件のバトル内に、KUMAが参加している判定済みバトルは見つかりませんでした。(公式APIの更新遅延の可能性があります)")
 
 else:
     st.error("ギルドデータが見つかりませんでした。公式APIが混雑している可能性があります。")
