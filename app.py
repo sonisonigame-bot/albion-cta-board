@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+import concurrent.futures
 
 # 画面設定
 st.set_page_config(page_title="🐻KUMA Albion Dashboard", layout="wide")
@@ -58,7 +59,6 @@ def convert_time(time_str):
     except Exception:
         return "Unknown", "Unknown"
 
-# ★ 装備やインベントリから安全にデータを取得するための防御関数
 def get_weapon(p_obj):
     if not p_obj: return None
     eq = p_obj.get("Equipment")
@@ -139,18 +139,15 @@ def get_market_prices(item_ids):
         except: pass
     return prices
 
-# ★ 修正: dict.items() やリストでのエラーを防ぐ安全な構造
 def calculate_loot_value(victim, price_dict):
     total = 0
     if not victim: return 0
-    
     eq = victim.get("Equipment") or {}
     for slot, item in eq.items():
         if item:
             iid = item.get("Type")
             count = item.get("Count", 1)
             total += price_dict.get(iid, 0) * count
-            
     inv = victim.get("Inventory") or []
     for item in inv:
         if item:
@@ -293,14 +290,12 @@ def render_battle_summary(events, market_prices, guild_id, guild_name, kuma_memb
         
         if is_k_kuma and not is_v_kuma:
             kuma_kills += 1; gained_fame += fame; gained_silver += loot_value
-            
             k_name = killer.get("Name", "Unknown") if is_kuma(killer, guild_id, guild_name, kuma_member_names) else None
             if not k_name:
                 for p in ev.get("Participants", []):
                     if is_kuma(p, guild_id, guild_name, kuma_member_names):
                         k_name = p.get("Name", "Unknown")
                         break
-            
             if k_name:
                 k_wep_url = kuma_players.get(k_name, {}).get("武器")
                 if k_name not in kuma_stats:
@@ -480,13 +475,15 @@ def get_analysis_events(guild_id):
         except: pass
     return events
 
+# ★ 追加: 公式APIが隠す「デスログ」を並列処理で強制的に回収する最強関数 ★
 @st.cache_data(ttl=60)
-def get_recent_events(guild_id, hours=1):
+def get_recent_events(guild_id, hours=1, max_events=1000):
     events = []
     now = datetime.now(timezone.utc)
     limit_time = now - timedelta(hours=hours)
     
-    for offset in range(0, 2000, 50):
+    # ① まずはギルドの公式キルログを取得
+    for offset in range(0, max_events, 50):
         try:
             res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
             if res.status_code == 200:
@@ -503,34 +500,55 @@ def get_recent_events(guild_id, hours=1):
                 if old_count == len(data): break
             else: break
         except: break
-    return events
+
+    # ② 戦闘に参加していたKUMAメンバーをリストアップ
+    active_kuma_ids = set()
+    for ev in events:
+        k_id = ev.get("Killer", {}).get("Id")
+        if k_id and ev.get("Killer", {}).get("GuildId") == guild_id:
+            active_kuma_ids.add(k_id)
+        for p in ev.get("Participants", []):
+            if p.get("Id") and p.get("GuildId") == guild_id:
+                active_kuma_ids.add(p["Id"])
+                
+    active_kuma_ids = list(active_kuma_ids)[:50] # 負荷対策で上限50人
+    
+    # ③ APIが隠した純粋な「デスログ」を個人の履歴から並列で強制回収
+    extra_deaths = []
+    def fetch_deaths(pid):
+        try:
+            res = requests.get(f"{BASE_URL}/players/{pid}/deaths", timeout=5)
+            if res.status_code == 200: return res.json()
+        except: pass
+        return []
+
+    if active_kuma_ids:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            results = executor.map(fetch_deaths, active_kuma_ids)
+            for p_deaths in results:
+                for d in p_deaths:
+                    ts_str = d.get("TimeStamp", "")
+                    try:
+                        d_time = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                        if d_time >= limit_time: extra_deaths.append(d)
+                    except: pass
+
+    # ④ キルログと隠されていたデスログを合体させて重複排除
+    all_events = {ev.get("EventId"): ev for ev in events if ev.get("EventId")}
+    for d in extra_deaths:
+        if d.get("EventId"): all_events[d["EventId"]] = d
+        
+    merged = list(all_events.values())
+    merged = sorted(merged, key=lambda x: datetime.strptime(x["TimeStamp"][:19], "%Y-%m-%dT%H:%M:%S"), reverse=True)
+    return merged
 
 @st.cache_data(ttl=180)
 def generate_custom_battles(guild_id, time_limit_hours=24):
-    events = []
-    now = datetime.now(timezone.utc)
-    limit_time = now - timedelta(hours=time_limit_hours)
-    
-    for offset in range(0, 2000, 50):
-        try:
-            res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                if not data: break
-                old_count = 0
-                for ev in data:
-                    ts_str = ev.get("TimeStamp", "")
-                    try:
-                        ev_time = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                        if ev_time >= limit_time: events.append(ev)
-                        else: old_count += 1
-                    except: pass
-                if old_count == len(data): break
-            else: break
-        except: break
-
+    # 最新の強力な関数（デスログ完全回収版）を使って24時間分のログを引っ張る
+    events = get_recent_events(guild_id, hours=time_limit_hours, max_events=2000)
     if not events: return []
 
+    # 時系列順（古い順）に並べ替えてバトルを判定
     events_sorted = sorted(events, key=lambda x: datetime.strptime(x["TimeStamp"][:19], "%Y-%m-%dT%H:%M:%S"))
     battles = []
     current_battle = []
