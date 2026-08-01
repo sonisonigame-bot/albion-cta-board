@@ -493,7 +493,7 @@ def get_master_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_
             else: break
         except: break
 
-    # ② ギルド名簿全員のデスログを強制回収（1時間レポートに確実に入れるため）
+    # ② ギルド名簿全員のデスログを強制回収（漏れを防ぐため）
     all_kuma_ids = list(kuma_member_ids_tuple)
     extra_deaths = []
 
@@ -618,10 +618,10 @@ if guild_info:
         master_events = get_master_events(guild_id, GUILD_NAME, kuma_members_tuple, kuma_member_ids_tuple)
     
     # --- 4. 画面表示 ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # ★ タブを4つに整理しました
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📊 総合ステータス＆分析", 
         "🛡️ バトルレポート (新システム)",
-        "⏳ 1時間の戦況レポート",
         "⚔️ 最近のキルボード",
         "🔍 プレイヤー詳細分析"
     ])
@@ -735,29 +735,8 @@ if guild_info:
                 with st.expander(header_title, expanded=(idx == 0)):
                     render_battle_summary(events, battle_market_prices, guild_id, GUILD_NAME, kuma_member_names)
 
-    # 【タブ3】⏳ 1時間の戦況レポート
+    # 【タブ3】⚔️ 最近のキルボード
     with tab3:
-        st.subheader("⏳ 直近1時間のリアルタイム・レポート")
-        recent_events_tab3 = filter_events_by_hours(master_events, 1)
-            
-        if not recent_events_tab3:
-            st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
-        else:
-            with st.spinner("💰 1時間分のロスト品の市場価格を解析中..."):
-                all_item_ids_hour = []
-                for ev in recent_events_tab3:
-                    v_eq = ev.get("Victim", {}).get("Equipment") or {}
-                    for item in v_eq.values():
-                        if item: all_item_ids_hour.append(item.get("Type"))
-                    v_inv = ev.get("Victim", {}).get("Inventory") or []
-                    for item in v_inv:
-                        if item: all_item_ids_hour.append(item.get("Type"))
-                market_prices_hour = get_market_prices(all_item_ids_hour)
-
-            render_battle_summary(recent_events_tab3, market_prices_hour, guild_id, GUILD_NAME, kuma_member_names)
-
-    # 【タブ4】⚔️ 最近のキルボード
-    with tab4:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
         st.write("※ 独自アルゴリズムで修復・回収した「過去24時間」のログから表示しています。")
         search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
@@ -827,8 +806,8 @@ if guild_info:
                 with col_i: st.markdown(f"**🎒 ロストしたアイテム:**<br>{inv_html}" if inv_html else "**🎒 ロストしたアイテム:** 空っぽ", unsafe_allow_html=True)
                 st.write("---")
 
-    # 【タブ5】🔍 プレイヤー詳細分析
-    with tab5:
+    # 【タブ4】🔍 プレイヤー詳細分析
+    with tab4:
         st.subheader("🔍 プレイヤー詳細分析")
         search_name = st.text_input("プレイヤー名を入力（例: sonikuma）")
         if st.button("検索する", type="primary"):
