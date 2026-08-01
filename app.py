@@ -466,34 +466,16 @@ def get_guild_members(guild_id):
     except: pass
     return []
 
-@st.cache_data(ttl=60)
-def get_guild_events(guild_id, offset=0, limit=10):
-    try:
-        res = requests.get(f"{BASE_URL}/events?limit={limit}&offset={offset}&guildId={guild_id}", timeout=10)
-        if res.status_code == 200: return res.json()
-    except: pass
-    return []
-
-@st.cache_data(ttl=300)
-def get_analysis_events(guild_id):
-    events = []
-    for offset in [0, 50, 100]:
-        try:
-            res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
-            if res.status_code == 200: events.extend(res.json())
-        except: pass
-    return events
-
-# ★ 最強探索エンジン（1時間以内の場合は全メンバー名簿から強制チェック！） ★
-@st.cache_data(ttl=60)
-def get_recent_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_tuple, hours=1, max_events=5000):
+# ★ 全データを1回で完全に集める「超速マスター同期エンジン」 ★
+@st.cache_data(ttl=180) # 3分間キャッシュしてAPI制限を完全回避
+def get_master_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_tuple):
     kuma_member_names = set(kuma_members_tuple)
     events = []
     now = datetime.now(timezone.utc)
-    limit_time = now - timedelta(hours=hours)
+    limit_time = now - timedelta(hours=24) # 固定で過去24時間分を取得
     
-    # ① ギルドの公式キルログを取得
-    for offset in range(0, max_events, 50):
+    # ① ギルド公式キルログを取得（最大5000件）
+    for offset in range(0, 5000, 50):
         try:
             res = requests.get(f"{BASE_URL}/events?limit=50&offset={offset}&guildId={guild_id}", timeout=10)
             if res.status_code == 200:
@@ -511,28 +493,11 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_
             else: break
         except: break
 
-    # ② アクティブメンバーのリストアップ
-    # ★修正: 1時間以内のリアルタイム更新の場合は、イベントに出ていなくても「名簿の全員」を強制チェック！
-    if hours <= 1 and kuma_member_ids_tuple:
-        active_kuma_ids = list(kuma_member_ids_tuple)
-    else:
-        active_kuma_ids_set = set()
-        for ev in events:
-            k = ev.get("Killer", {})
-            if k.get("Id") and is_kuma(k, guild_id, guild_name, kuma_member_names):
-                active_kuma_ids_set.add(k["Id"])
-            v = ev.get("Victim", {})
-            if v.get("Id") and is_kuma(v, guild_id, guild_name, kuma_member_names):
-                active_kuma_ids_set.add(v["Id"])
-            for p in ev.get("Participants", []):
-                if p.get("Id") and is_kuma(p, guild_id, guild_name, kuma_member_names):
-                    active_kuma_ids_set.add(p["Id"])
-        active_kuma_ids = list(active_kuma_ids_set)[:200]
-    
-    # ③ APIが隠した純粋な「デスログ」を個人の履歴から並列で強制回収
+    # ② ギルド名簿全員のデスログを強制回収（1時間レポートに確実に入れるため）
+    all_kuma_ids = list(kuma_member_ids_tuple)
     extra_deaths = []
-    if active_kuma_ids:
-        # 高速化のためにセッションを使用
+
+    if all_kuma_ids:
         with requests.Session() as session:
             def fetch_deaths(pid):
                 try:
@@ -541,8 +506,9 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_
                 except: pass
                 return []
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-                results = executor.map(fetch_deaths, active_kuma_ids)
+            # 5スレッドの並列処理で公式APIを怒らせずに安全＆高速に全メンバーチェック
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                results = executor.map(fetch_deaths, all_kuma_ids)
                 for p_deaths in results:
                     if p_deaths:
                         for d in p_deaths:
@@ -552,20 +518,31 @@ def get_recent_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_
                                 if d_time >= limit_time: extra_deaths.append(d)
                             except: pass
 
-    # ④ キルログと隠されていたデスログを合体させて重複排除
-    all_events = {ev.get("EventId"): ev for ev in events if ev.get("EventId")}
+    # ③ キルログと回収したデスログを合体させて重複排除
+    all_events_dict = {ev.get("EventId"): ev for ev in events if ev.get("EventId")}
     for d in extra_deaths:
-        if d.get("EventId"): all_events[d["EventId"]] = d
+        if d.get("EventId"): all_events_dict[d["EventId"]] = d
         
-    merged = list(all_events.values())
+    merged = list(all_events_dict.values())
     merged = sorted(merged, key=lambda x: datetime.strptime(x["TimeStamp"][:19], "%Y-%m-%dT%H:%M:%S"), reverse=True)
     return merged
 
-@st.cache_data(ttl=180)
-def generate_custom_battles(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_tuple, time_limit_hours=24):
-    events = get_recent_events(guild_id, guild_name, kuma_members_tuple, kuma_member_ids_tuple, hours=time_limit_hours, max_events=5000)
-    if not events: return []
+# 時間で切り取るフィルター関数
+def filter_events_by_hours(events, hours):
+    now = datetime.now(timezone.utc)
+    limit_time = now - timedelta(hours=hours)
+    filtered = []
+    for ev in events:
+        ts_str = ev.get("TimeStamp", "")
+        try:
+            ev_time = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            if ev_time >= limit_time:
+                filtered.append(ev)
+        except: pass
+    return filtered
 
+def process_custom_battles(events):
+    if not events: return []
     events_sorted = sorted(events, key=lambda x: datetime.strptime(x["TimeStamp"][:19], "%Y-%m-%dT%H:%M:%S"))
     battles = []
     current_battle = []
@@ -596,7 +573,6 @@ def generate_custom_battles(guild_id, guild_name, kuma_members_tuple, kuma_membe
             if ev.get("Victim", {}).get("Name"): players.add(ev["Victim"]["Name"])
             for p in ev.get("Participants", []):
                 if p.get("Name"): players.add(p["Name"])
-                
         if len(players) > 2: # 1v1を除外
             valid_battles.append({"events": b, "players_count": len(players)})
             
@@ -625,7 +601,7 @@ def get_player_recent_history(player_id, event_type="kills", limit=3):
     return []
 
 # --- 3. データの取得 ---
-with st.spinner("Albion公式サーバーからデータを取得中..."):
+with st.spinner("Albion公式サーバーからギルド情報を取得中..."):
     guild_info = get_guild_info(GUILD_NAME)
 
 if guild_info:
@@ -635,8 +611,11 @@ if guild_info:
         members_data = get_guild_members(guild_id)
         kuma_member_names = {str(m["Name"]).upper() for m in members_data} if members_data else set()
         kuma_members_tuple = tuple(sorted(kuma_member_names))
-        # ★ 全メンバーのIDリストを作成
         kuma_member_ids_tuple = tuple(m["Id"] for m in members_data if m.get("Id"))
+        
+    # ★ ここで24時間分の全データを一回だけ強力に同期する！(各タブで使い回すため超高速になる)
+    with st.spinner("全データを同期中... (最大10〜20秒かかります)"):
+        master_events = get_master_events(guild_id, GUILD_NAME, kuma_members_tuple, kuma_member_ids_tuple)
     
     # --- 4. 画面表示 ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -664,8 +643,7 @@ if guild_info:
         st.divider()
 
         st.subheader("📜 過去6時間のバトル タイムライン (詳細キル/デスログ)")
-        with st.spinner("直近6時間のタイムラインを生成中... (※大容量モード作動中)"):
-            recent_events_tab1 = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, kuma_member_ids_tuple, hours=6, max_events=5000)
+        recent_events_tab1 = filter_events_by_hours(master_events, 6)
             
         if recent_events_tab1:
             kill_logs_t1, death_logs_t1 = generate_timeline_html(recent_events_tab1, guild_id, GUILD_NAME, kuma_member_names)
@@ -686,15 +664,12 @@ if guild_info:
             st.info("過去6時間以内に発生した戦闘ログはありません。")
         st.divider()
             
-        st.subheader("📈 ギルド行動 ＆ メタ分析")
-        with st.spinner("行動データを集計中..."):
-            analysis_events = get_analysis_events(guild_id)
-        
-        if analysis_events:
+        st.subheader("📈 ギルド行動 ＆ メタ分析 (過去24h)")
+        if master_events:
             st.markdown("##### 🕒 最も活発な時間帯 (JST)")
             hour_labels = [f"{h:02d}時" for h in range(1, 25)]
             hours = {label: 0 for label in hour_labels}
-            for ev in analysis_events:
+            for ev in master_events:
                 _, jst_time = convert_time(ev.get("TimeStamp", ""))
                 if jst_time != "Unknown":
                     hour_str = jst_time.split(" ")[1].split(":")[0]
@@ -719,8 +694,7 @@ if guild_info:
         st.subheader("🛡️ 新バトルレポート")
         st.write("公式APIの更新遅延を回避するため、キルログから「戦闘が5分空いたら別バトル」という独自ロジックで集団戦を自動生成しています。（過去24時間・1v1は除外）")
         
-        with st.spinner("過去24時間分の全キルログを解析し、バトルを再構築しています... (最大5000件フル探索中)"):
-            custom_battles = generate_custom_battles(guild_id, GUILD_NAME, kuma_members_tuple, kuma_member_ids_tuple, time_limit_hours=24)
+        custom_battles = process_custom_battles(master_events)
             
         if not custom_battles:
             st.info("過去24時間に、条件に一致するKUMAの集団戦（3人以上）は見つかりませんでした。")
@@ -764,15 +738,14 @@ if guild_info:
     # 【タブ3】⏳ 1時間の戦況レポート
     with tab3:
         st.subheader("⏳ 直近1時間のリアルタイム・レポート")
-        with st.spinner("直近1時間分のデータを探索・集計中... (全メンバー強制同期中)"):
-            recent_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, kuma_member_ids_tuple, hours=1, max_events=2000)
+        recent_events_tab3 = filter_events_by_hours(master_events, 1)
             
-        if not recent_events:
+        if not recent_events_tab3:
             st.info("直近1時間以内に発生したKUMAの戦闘ログはありません。みんな平和に採集しているか、休憩中です！☕")
         else:
             with st.spinner("💰 1時間分のロスト品の市場価格を解析中..."):
                 all_item_ids_hour = []
-                for ev in recent_events:
+                for ev in recent_events_tab3:
                     v_eq = ev.get("Victim", {}).get("Equipment") or {}
                     for item in v_eq.values():
                         if item: all_item_ids_hour.append(item.get("Type"))
@@ -781,17 +754,16 @@ if guild_info:
                         if item: all_item_ids_hour.append(item.get("Type"))
                 market_prices_hour = get_market_prices(all_item_ids_hour)
 
-            render_battle_summary(recent_events, market_prices_hour, guild_id, GUILD_NAME, kuma_member_names)
+            render_battle_summary(recent_events_tab3, market_prices_hour, guild_id, GUILD_NAME, kuma_member_names)
 
     # 【タブ4】⚔️ 最近のキルボード
     with tab4:
         st.subheader("⚔️ 最近の戦闘ログ (超詳細)")
-        st.write("※ 独自アルゴリズムで修復・回収した「過去24時間（最大5000件）」のログから表示しています。")
+        st.write("※ 独自アルゴリズムで修復・回収した「過去24時間」のログから表示しています。")
         search_filter = st.text_input("🔍 プレイヤー名でログを絞り込む（空欄で全件表示）", "")
         display_events = []
         
-        with st.spinner("全ログデータを展開中..."):
-            all_board_events = get_recent_events(guild_id, GUILD_NAME, kuma_members_tuple, kuma_member_ids_tuple, hours=24, max_events=5000)
+        all_board_events = master_events
 
         if search_filter:
             for ev in all_board_events:
@@ -799,7 +771,7 @@ if guild_info:
                 v_name = ev.get("Victim", {}).get("Name", "")
                 if search_filter.upper() in k_name.upper() or search_filter.upper() in v_name.upper():
                     display_events.append(ev)
-            display_events = display_events[:15] # 検索時は最大15件
+            display_events = display_events[:15]
         else:
             selected_page = st.radio("表示するページを選択してください", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], horizontal=True)
             start_idx = (selected_page - 1) * 10
